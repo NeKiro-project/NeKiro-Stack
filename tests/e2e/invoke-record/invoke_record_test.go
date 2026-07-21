@@ -77,7 +77,7 @@ func TestInvokeToRecordAcceptance(t *testing.T) {
 	}
 	env.forbidden = append(env.forbidden, password)
 	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }, Timeout: 45 * time.Second}
-	if result := doRequest(t, client, env.controlPlane+"/readyz", http.MethodGet, "", "", nil); result.status != http.StatusOK {
+	if result := doRequest(t, client, env.controlPlane+"/readyz", http.MethodGet, "", "", nil); result.status != http.StatusNoContent {
 		t.Fatalf("Control Plane readiness status=%d body=%s", result.status, result.body)
 	}
 
@@ -150,7 +150,7 @@ func TestInvokeToRecordAcceptance(t *testing.T) {
 	assertNoForbiddenBody(t, invocationIsolation.body, env.forbidden, "foreign Invocation response")
 
 	restartRouter(t, env.composeFile)
-	waitForReady(t, client, env.routerURL+"/readyz")
+	waitForReady(t, client, env.routerURL+"/readyz", http.StatusOK)
 	readAfterRestart := readTrace(t, client, env, nested.result.TraceID)
 	if len(readAfterRestart.Invocations) != 2 {
 		t.Fatalf("trace after Router restart=%#v", readAfterRestart.Invocations)
@@ -506,7 +506,7 @@ func assertDependencyFailure(t *testing.T, client *http.Client, env acceptanceEn
 	if output, err := start.CombinedOutput(); err != nil {
 		t.Fatalf("restart Control Plane after dependency fixture: %v output=%s", err, output)
 	}
-	waitForReady(t, client, env.controlPlane+"/readyz")
+	waitForReady(t, client, env.controlPlane+"/readyz", http.StatusNoContent)
 	if requestErr != nil {
 		t.Fatalf("dependency fixture request: %v", requestErr)
 	}
@@ -806,7 +806,7 @@ func restartRouter(t *testing.T, composeFile string) {
 	}
 }
 
-func waitForReady(t *testing.T, client *http.Client, endpoint string) {
+func waitForReady(t *testing.T, client *http.Client, endpoint string, wantStatus int) {
 	t.Helper()
 	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
@@ -817,7 +817,7 @@ func waitForReady(t *testing.T, client *http.Client, endpoint string) {
 		response, err := client.Do(request)
 		if err == nil {
 			_ = response.Body.Close()
-			if response.StatusCode == http.StatusOK {
+			if response.StatusCode == wantStatus {
 				return
 			}
 		}
