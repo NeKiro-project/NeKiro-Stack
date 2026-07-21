@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -164,6 +165,10 @@ func TestInvokeToRecordAcceptance(t *testing.T) {
 
 func loadAcceptanceEnv(t *testing.T) acceptanceEnv {
 	t.Helper()
+	composeFile := requiredEnv(t, "NEKIRO_E2E_COMPOSE_FILE")
+	if !filepath.IsAbs(composeFile) {
+		t.Fatalf("NEKIRO_E2E_COMPOSE_FILE must be an absolute path")
+	}
 	return acceptanceEnv{
 		controlPlane: requiredEnv(t, "NEKIRO_E2E_CONTROL_PLANE_URL"),
 		routerURL:    requiredEnv(t, "NEKIRO_E2E_ROUTER_URL"),
@@ -172,7 +177,7 @@ func loadAcceptanceEnv(t *testing.T) acceptanceEnv {
 		userToken:    requiredEnv(t, "NEKIRO_E2E_USER_TOKEN"),
 		otherToken:   requiredEnv(t, "NEKIRO_E2E_OTHER_TOKEN"),
 		databaseURL:  requiredEnv(t, "NEKIRO_E2E_DATABASE_URL"),
-		composeFile:  requiredEnv(t, "NEKIRO_E2E_COMPOSE_FILE"),
+		composeFile:  composeFile,
 	}
 }
 
