@@ -136,11 +136,21 @@ services:
       dockerfile: agents/runtime-b/Dockerfile
     environment:
       RUNTIME_B_LISTEN_ADDR: "0.0.0.0:8092"
+      RUNTIME_B_AGENT_ID: "runtime-b"
+      RUNTIME_B_ROUTER_URL: "http://a2a-router:8081"
+      RUNTIME_B_ROUTER_TOKEN: "${RUNTIME_B_ROUTER_TOKEN:?RUNTIME_B_ROUTER_TOKEN must be set and non-empty}"
+      RUNTIME_B_TARGET_AGENT_ID: "runtime-a"
+      RUNTIME_B_TARGET_CAPABILITY: "runtime.echo"
+      RUNTIME_B_RESPONSE_LIMIT_BYTES: "${RUNTIME_B_RESPONSE_LIMIT_BYTES:?RUNTIME_B_RESPONSE_LIMIT_BYTES must be set and non-empty}"
+      RUNTIME_B_EVENT_LIMIT_BYTES: "${RUNTIME_B_EVENT_LIMIT_BYTES:?RUNTIME_B_EVENT_LIMIT_BYTES must be set and non-empty}"
       NEKIRO_AGENT_CHALLENGE_DIRECTORY: "/tmp/nekiro-challenges"
       NEKIRO_AGENT_ROUTER_ISSUER: "${NEKIRO_AGENT_ROUTER_ISSUER:?NEKIRO_AGENT_ROUTER_ISSUER must be set and non-empty}"
       NEKIRO_AGENT_ROUTER_AUDIENCE: "http://runtime-b:8092"
       NEKIRO_AGENT_ROUTER_KEY_ID: "${NEKIRO_AGENT_ROUTER_KEY_ID:?NEKIRO_AGENT_ROUTER_KEY_ID must be set and non-empty}"
       NEKIRO_AGENT_ROUTER_PUBLIC_KEY_BASE64URL: "${NEKIRO_AGENT_ROUTER_PUBLIC_KEY_BASE64URL:?NEKIRO_AGENT_ROUTER_PUBLIC_KEY_BASE64URL must be set and non-empty}"
+    depends_on:
+      a2a-router:
+        condition: service_healthy
     networks:
       - platform-internal
     healthcheck:
