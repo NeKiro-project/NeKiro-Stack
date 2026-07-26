@@ -314,11 +314,25 @@ func acceptanceCardWithTimeoutAndCapabilities(agentID, name, endpoint string, ca
 
 func assertAgentPortsNotExposed(t *testing.T, env *acceptanceEnv) {
 	t.Helper()
-	for _, target := range []struct{ service, port string }{{service: "runtime-a", port: "8091"}, {service: "runtime-b", port: "8092"}} {
-		command := composeCommand(t.Context(), *env, "port", target.service, target.port)
-		output, err := command.CombinedOutput()
-		if err == nil && len(bytes.TrimSpace(output)) != 0 {
-			t.Fatalf("Agent service %s exposes a host port: %s", target.service, output)
+	output, err := composeCommand(t.Context(), *env, "config", "--format", "json").CombinedOutput()
+	if err != nil {
+		t.Fatalf("Compose config for Agent port isolation failed: %v output=%s", err, output)
+	}
+	var configuration struct {
+		Services map[string]struct {
+			Ports []json.RawMessage `json:"ports"`
+		} `json:"services"`
+	}
+	if err := json.Unmarshal(output, &configuration); err != nil {
+		t.Fatalf("decode Compose config for Agent port isolation: %v", err)
+	}
+	for _, service := range []string{"runtime-a", "runtime-b"} {
+		value, exists := configuration.Services[service]
+		if !exists {
+			t.Fatalf("Compose config has no Agent service %s", service)
+		}
+		if len(value.Ports) != 0 {
+			t.Fatalf("Agent service %s exposes host ports: %s", service, value.Ports)
 		}
 	}
 }
