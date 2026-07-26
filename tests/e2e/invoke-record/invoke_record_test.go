@@ -197,8 +197,14 @@ func TestInvokeToRecordAcceptance(t *testing.T) {
 		ChildInvocationID string          `json:"childInvocationId"`
 		ChildResult       json.RawMessage `json:"childResult"`
 	}
-	if err := json.Unmarshal(reverse.result.Result, &reversePayload); err != nil || reversePayload.Agent != "runtime-b" || reversePayload.Fixture != "nested" || reversePayload.ChildInvocationID == "" || !bytes.Contains(reversePayload.ChildResult, []byte(`"agent":"runtime-a"`)) {
-		t.Fatalf("reverse result body=%s payload=%#v err=%v", reverse.result.Result, reversePayload, err)
+	var reverseMessage struct {
+		Parts []struct {
+			Kind string          `json:"kind"`
+			Data json.RawMessage `json:"data"`
+		} `json:"parts"`
+	}
+	if err := json.Unmarshal(reverse.result.Result, &reverseMessage); err != nil || len(reverseMessage.Parts) != 1 || reverseMessage.Parts[0].Kind != "data" || json.Unmarshal(reverseMessage.Parts[0].Data, &reversePayload) != nil || reversePayload.Agent != "runtime-b" || reversePayload.Fixture != "nested" || reversePayload.ChildInvocationID == "" || !bytes.Contains(reversePayload.ChildResult, []byte(`"agent":"runtime-a"`)) {
+		t.Fatalf("reverse result body=%s message=%#v payload=%#v err=%v", reverse.result.Result, reverseMessage, reversePayload, err)
 	}
 	reverseTrace := readTrace(t, client, env, reverse.result.TraceID)
 	assertReverseTrace(t, client, env, reverseTrace, reverse.result.InvocationID, reversePayload.ChildInvocationID, runtimeBRelease, runtimeARelease)
