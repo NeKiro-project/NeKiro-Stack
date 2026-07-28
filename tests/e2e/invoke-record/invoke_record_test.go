@@ -120,14 +120,14 @@ func TestInvokeToRecordAcceptance(t *testing.T) {
 	if result := doRequest(t, client, env.controlPlane+"/readyz", http.MethodGet, "", "", nil); result.status != http.StatusNoContent {
 		t.Fatalf("Control Plane readiness status=%d body=%s", result.status, result.body)
 	}
-	runtimeA := acceptanceCard("runtime-a", "Runtime A", "http://runtime-a:8091", "runtime.cross", nil, false)
+	runtimeA := acceptanceCardWithCapabilities("runtime-a", "Runtime A", "http://runtime-a:8091", []string{"runtime.cross", "runtime.echo"}, nil, false)
 	runtimeB := acceptanceCard("runtime-b", "Runtime B", "http://runtime-b:8092", "runtime.echo", []string{"text.read"}, true)
 	runtimeProtocol := acceptanceCard("runtime-protocol", "Runtime Protocol Fixture", "http://runtime-b:8092", "runtime.protocol", nil, false)
 	runtimeRoute := acceptanceCard("runtime-route", "Runtime Route Fixture", "http://runtime-b:8092/unavailable", "runtime.route", nil, false)
 	runtimeTimeout := acceptanceCardWithTimeout("runtime-timeout", "Runtime Timeout Fixture", "http://runtime-b:8092", "runtime.timeout", nil, true, 50)
 	runtimeInterrupted := acceptanceCard("runtime-interrupted", "Runtime Interrupted Fixture", "http://runtime-b:8092", "runtime.interrupted", nil, true)
 	runtimeLifecycle := acceptanceCard("runtime-lifecycle", "Runtime Lifecycle Fixture", "http://runtime-b:8092", "runtime.echo", nil, false)
-	registerAndPublish(t, client, &env, runtimeA)
+	runtimeARelease := registerAndPublish(t, client, &env, runtimeA)
 	runtimeBRelease := registerAndPublish(t, client, &env, runtimeB)
 	registerAndPublish(t, client, &env, runtimeProtocol)
 	registerAndPublish(t, client, &env, runtimeRoute)
@@ -143,6 +143,7 @@ func TestInvokeToRecordAcceptance(t *testing.T) {
 	assertNoForbiddenBody(t, discovery.body, env.forbidden, "Discovery Card response")
 	createWorkspace(t, client, env, acceptanceWorkspace, env.ownerToken)
 	assertDirectAgentRequestIsRejected(t, client, &env, runtimeBRelease)
+	assertAgentPortsNotExposed(t, &env)
 	install(t, client, env, acceptanceWorkspace, "runtime-a", []string{})
 	runtimeBInstallation := install(t, client, env, acceptanceWorkspace, "runtime-b", []string{"text.read"})
 	install(t, client, env, acceptanceWorkspace, "runtime-protocol", []string{})
@@ -185,6 +186,28 @@ func TestInvokeToRecordAcceptance(t *testing.T) {
 	assertTraceRecords(t, client, env, trace)
 	assertQueryableRelease(t, client, env, env.releases["runtime-a"])
 	assertQueryableRelease(t, client, env, runtimeBRelease)
+
+	reverse := invokeJSON(t, client, env, "runtime-b", "runtime.echo", map[string]any{"fixture": "nested", "value": "reverse-nested-value"})
+	if reverse.result.Status != "succeeded" {
+		t.Fatalf("reverse result=%s", reverse.result.Result)
+	}
+	var reversePayload struct {
+		Agent             string          `json:"agent"`
+		Fixture           string          `json:"fixture"`
+		ChildInvocationID string          `json:"childInvocationId"`
+		ChildResult       json.RawMessage `json:"childResult"`
+	}
+	var reverseMessage struct {
+		Parts []struct {
+			Kind string          `json:"kind"`
+			Data json.RawMessage `json:"data"`
+		} `json:"parts"`
+	}
+	if err := json.Unmarshal(reverse.result.Result, &reverseMessage); err != nil || len(reverseMessage.Parts) != 1 || reverseMessage.Parts[0].Kind != "data" || json.Unmarshal(reverseMessage.Parts[0].Data, &reversePayload) != nil || reversePayload.Agent != "runtime-b" || reversePayload.Fixture != "nested" || reversePayload.ChildInvocationID == "" || !bytes.Contains(reversePayload.ChildResult, []byte(`"agent":"runtime-a"`)) {
+		t.Fatalf("reverse result body=%s message=%#v payload=%#v err=%v", reverse.result.Result, reverseMessage, reversePayload, err)
+	}
+	reverseTrace := readTrace(t, client, env, reverse.result.TraceID)
+	assertReverseTrace(t, client, env, reverseTrace, reverse.result.InvocationID, reversePayload.ChildInvocationID, runtimeBRelease, runtimeARelease)
 	assertInstallationAndReleaseGates(t, client, &env, runtimeBInstallation, runtimeLifecycleInstallation, runtimeLifecycleRelease)
 
 	otherWorkspace := "workspace-other"
@@ -256,19 +279,33 @@ func composeCommand(ctx context.Context, env acceptanceEnv, args ...string) *exe
 }
 
 func acceptanceCard(agentID, name, endpoint, capability string, permissions []string, streaming bool) []byte {
-	return acceptanceCardWithTimeout(agentID, name, endpoint, capability, permissions, streaming, 30000)
+	return acceptanceCardWithCapabilities(agentID, name, endpoint, []string{capability}, permissions, streaming)
 }
 
 func acceptanceCardWithTimeout(agentID, name, endpoint, capability string, permissions []string, streaming bool, timeoutMS int64) []byte {
+	return acceptanceCardWithTimeoutAndCapabilities(agentID, name, endpoint, []string{capability}, permissions, streaming, timeoutMS)
+}
+
+func acceptanceCardWithCapabilities(agentID, name, endpoint string, capabilities, permissions []string, streaming bool) []byte {
+	return acceptanceCardWithTimeoutAndCapabilities(agentID, name, endpoint, capabilities, permissions, streaming, 30000)
+}
+
+func acceptanceCardWithTimeoutAndCapabilities(agentID, name, endpoint string, capabilities, permissions []string, streaming bool, timeoutMS int64) []byte {
 	if permissions == nil {
 		permissions = []string{}
+	}
+	if len(capabilities) == 0 {
+		panic("acceptance card requires a capability")
 	}
 	card := contracts.AgentCard{
 		SchemaVersion: contracts.AgentCardSchemaVersion, AgentID: agentID, Name: name,
 		Description: "Deterministic acceptance Agent", Owner: contracts.AgentOwner{ID: "acceptance-owner", DisplayName: "Acceptance Owner"}, Version: "1.0.0",
 		Protocol:       contracts.AgentProtocol{Type: "a2a", Version: contracts.A2AProtocolVersion, Transport: "JSONRPC", Endpoint: endpoint},
-		Skills:         []contracts.AgentSkill{{ID: capability, Name: capability, Description: "Acceptance capability", InputSchema: contracts.JSONSchema{"type": "object"}, OutputSchema: contracts.JSONSchema{"type": "object"}, RequiredPermissions: permissions}},
 		Authentication: contracts.AgentAuthentication{Type: "http_bearer"}, Limits: contracts.AgentLimits{TimeoutMS: timeoutMS, MaxInputBytes: json.Number("1048576"), MaxOutputBytes: json.Number("1048576"), Streaming: streaming},
+	}
+	card.Skills = make([]contracts.AgentSkill, 0, len(capabilities))
+	for _, capability := range capabilities {
+		card.Skills = append(card.Skills, contracts.AgentSkill{ID: capability, Name: capability, Description: "Acceptance capability", InputSchema: contracts.JSONSchema{"type": "object"}, OutputSchema: contracts.JSONSchema{"type": "object"}, RequiredPermissions: permissions})
 	}
 	card.Permissions = make([]contracts.PermissionDeclaration, 0, len(permissions))
 	for _, permission := range permissions {
@@ -279,6 +316,31 @@ func acceptanceCardWithTimeout(agentID, name, endpoint, capability string, permi
 		panic(err)
 	}
 	return encoded
+}
+
+func assertAgentPortsNotExposed(t *testing.T, env *acceptanceEnv) {
+	t.Helper()
+	output, err := composeCommand(t.Context(), *env, "config", "--format", "json").CombinedOutput()
+	if err != nil {
+		t.Fatalf("Compose config for Agent port isolation failed: %v output=%s", err, output)
+	}
+	var configuration struct {
+		Services map[string]struct {
+			Ports []json.RawMessage `json:"ports"`
+		} `json:"services"`
+	}
+	if err := json.Unmarshal(output, &configuration); err != nil {
+		t.Fatalf("decode Compose config for Agent port isolation: %v", err)
+	}
+	for _, service := range []string{"runtime-a", "runtime-b"} {
+		value, exists := configuration.Services[service]
+		if !exists {
+			t.Fatalf("Compose config has no Agent service %s", service)
+		}
+		if len(value.Ports) != 0 {
+			t.Fatalf("Agent service %s exposes host ports: %s", service, value.Ports)
+		}
+	}
 }
 
 func assertDirectAgentRequestIsRejected(t *testing.T, client *http.Client, env *acceptanceEnv, release contracts.AgentReleaseResponse) {
@@ -972,6 +1034,48 @@ func assertTraceRecords(t *testing.T, client *http.Client, env acceptanceEnv, tr
 			t.Fatal(err)
 		}
 	}
+}
+
+func assertReverseTrace(t *testing.T, client *http.Client, env acceptanceEnv, trace traceRead, rootInvocationID, childInvocationID string, rootRelease, childRelease contracts.AgentReleaseResponse) {
+	t.Helper()
+	if len(trace.Invocations) != 2 {
+		t.Fatalf("reverse Trace invocations=%d body=%s", len(trace.Invocations), trace.raw)
+	}
+	var root, child *contracts.InvocationRecordV4
+	for index := range trace.Invocations {
+		projection := &trace.Invocations[index]
+		switch projection.TargetAgentID {
+		case "runtime-b":
+			if root != nil {
+				t.Fatalf("reverse Trace contains multiple B projections: %#v", trace.Invocations)
+			}
+			root = projection
+		case "runtime-a":
+			if child != nil {
+				t.Fatalf("reverse Trace contains multiple A projections: %#v", trace.Invocations)
+			}
+			child = projection
+		default:
+			t.Fatalf("reverse Trace contains unexpected Agent: %#v", projection)
+		}
+	}
+	if root == nil || child == nil || root.InvocationID != rootInvocationID || child.InvocationID != childInvocationID || root.InvocationID == child.InvocationID || root.ParentInvocationID != "" || child.ParentInvocationID != root.InvocationID || root.RootTaskID != child.RootTaskID || root.TraceID != child.TraceID || root.TraceID != trace.TraceID {
+		t.Fatalf("reverse Trace lineage root=%#v child=%#v trace=%#v", root, child, trace)
+	}
+	if root.AgentReleaseID == child.AgentReleaseID || root.AgentCardDigest == child.AgentCardDigest {
+		t.Fatalf("reverse Trace provenance is not distinct root=%#v child=%#v", root, child)
+	}
+	if err := validateExpectedReleaseProvenance(*root, rootRelease); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateExpectedReleaseProvenance(*child, childRelease); err != nil {
+		t.Fatal(err)
+	}
+	assertRecord(t, client, env, root.InvocationID, acceptanceWorkspace, "runtime-b", "succeeded", "")
+	assertRecord(t, client, env, child.InvocationID, acceptanceWorkspace, "runtime-a", "succeeded", "")
+	assertQueryableRelease(t, client, env, rootRelease)
+	assertQueryableRelease(t, client, env, childRelease)
+	assertTraceRecords(t, client, env, trace)
 }
 
 func assertNoForbiddenBody(t *testing.T, body []byte, forbidden []string, surface string) {
