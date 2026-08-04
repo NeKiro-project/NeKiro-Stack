@@ -26,7 +26,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Nene7ko/NeKiro/contracts"
+	"github.com/NeKiro-project/NeKiro/contracts"
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
