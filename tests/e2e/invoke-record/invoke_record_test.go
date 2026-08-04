@@ -40,6 +40,7 @@ var ed25519SignaturePattern = regexp.MustCompile(`(^|[^A-Za-z0-9_-])([A-Za-z0-9_
 
 type acceptanceEnv struct {
 	controlPlane        string
+	publicAgentOrigin   string
 	routerURL           string
 	routerToken         string
 	ownerToken          string
@@ -53,6 +54,7 @@ type acceptanceEnv struct {
 	credentialKeyID     string
 	credentialPrivate   string
 	releases            map[string]contracts.AgentReleaseResponse
+	publicAgentIDs      map[string]string
 	credentialForbidden []string
 	forbidden           []string
 }
@@ -134,6 +136,7 @@ func TestInvokeToRecordAcceptance(t *testing.T) {
 	registerAndPublish(t, client, &env, runtimeTimeout)
 	registerAndPublish(t, client, &env, runtimeInterrupted)
 	runtimeLifecycleRelease := registerAndPublish(t, client, &env, runtimeLifecycle)
+	assertPublicAgentInputMatrix(t, client, env, contracts.CatalogEntry{PublicAgentID: env.publicAgentIDs["runtime-a"], PublicURL: env.publicAgentOrigin + "/a/" + env.publicAgentIDs["runtime-a"]})
 	assertVerificationFailureMatrix(t, client, &env)
 
 	discovery := doRequest(t, client, env.controlPlane+"/v3/agents?capability=runtime.echo", http.MethodGet, env.userToken, "", nil)
@@ -144,7 +147,7 @@ func TestInvokeToRecordAcceptance(t *testing.T) {
 	createWorkspace(t, client, env, acceptanceWorkspace, env.ownerToken)
 	assertDirectAgentRequestIsRejected(t, client, &env, runtimeBRelease)
 	assertAgentPortsNotExposed(t, &env)
-	install(t, client, env, acceptanceWorkspace, "runtime-a", []string{})
+	installFromPublicShare(t, client, env, acceptanceWorkspace, contracts.CatalogEntry{PublicAgentID: env.publicAgentIDs["runtime-a"], PublicURL: env.publicAgentOrigin + "/a/" + env.publicAgentIDs["runtime-a"]}, runtimeARelease)
 	runtimeBInstallation := install(t, client, env, acceptanceWorkspace, "runtime-b", []string{"text.read"})
 	install(t, client, env, acceptanceWorkspace, "runtime-protocol", []string{})
 	install(t, client, env, acceptanceWorkspace, "runtime-route", []string{})
@@ -248,6 +251,7 @@ func loadAcceptanceEnv(t *testing.T) acceptanceEnv {
 	}
 	return acceptanceEnv{
 		controlPlane:      requiredEnv(t, "NEKIRO_E2E_CONTROL_PLANE_URL"),
+		publicAgentOrigin: requiredEnv(t, "NEKIRO_E2E_PUBLIC_AGENT_ORIGIN"),
 		routerURL:         requiredEnv(t, "NEKIRO_E2E_ROUTER_URL"),
 		routerToken:       requiredEnv(t, "NEKIRO_E2E_ROUTER_TOKEN"),
 		ownerToken:        requiredEnv(t, "NEKIRO_E2E_OWNER_TOKEN"),
@@ -261,6 +265,7 @@ func loadAcceptanceEnv(t *testing.T) acceptanceEnv {
 		credentialKeyID:   requiredEnv(t, "NEKIRO_ROUTER_AGENT_CREDENTIAL_KEY_ID"),
 		credentialPrivate: requiredEnv(t, "NEKIRO_ROUTER_AGENT_CREDENTIAL_PRIVATE_KEY_BASE64URL"),
 		releases:          make(map[string]contracts.AgentReleaseResponse),
+		publicAgentIDs:    make(map[string]string),
 	}
 }
 
@@ -362,17 +367,26 @@ func assertDirectAgentRequestIsRejected(t *testing.T, client *http.Client, env *
 }
 
 func registerCard(t *testing.T, client *http.Client, env acceptanceEnv, card []byte) contracts.AgentCard {
+	value, _ := registerCardWithEntry(t, client, env, card)
+	return value
+}
+
+func registerCardWithEntry(t *testing.T, client *http.Client, env acceptanceEnv, card []byte) (contracts.AgentCard, contracts.CatalogEntry) {
 	t.Helper()
 	registered := doRequest(t, client, env.controlPlane+"/v3/agents", http.MethodPost, env.ownerToken, "application/json", map[string]any{"card": json.RawMessage(card)})
 	if registered.status != http.StatusCreated {
 		t.Fatalf("register status=%d body=%s", registered.status, registered.body)
 	}
 	assertNoForbiddenBody(t, registered.body, env.forbidden, "registered Card response")
-	var value contracts.AgentCard
-	if err := json.Unmarshal(card, &value); err != nil {
+	var value contracts.CatalogEntry
+	if err := json.Unmarshal(registered.body, &value); err != nil || value.PublicAgentID == "" || value.PublicURL != env.publicAgentOrigin+"/a/"+value.PublicAgentID {
+		t.Fatalf("decode stable public Agent identity: value=%#v error=%v", value, err)
+	}
+	var cardValue contracts.AgentCard
+	if err := json.Unmarshal(card, &cardValue); err != nil {
 		t.Fatal(err)
 	}
-	return value
+	return cardValue, value
 }
 
 func createEndpointBinding(t *testing.T, client *http.Client, env acceptanceEnv, card contracts.AgentCard) contracts.EndpointBindingResponse {
@@ -459,7 +473,8 @@ func transitionRelease(t *testing.T, client *http.Client, env acceptanceEnv, rel
 
 func registerAndPublish(t *testing.T, client *http.Client, env *acceptanceEnv, cardJSON []byte) contracts.AgentReleaseResponse {
 	t.Helper()
-	card := registerCard(t, client, *env, cardJSON)
+	card, entry := registerCardWithEntry(t, client, *env, cardJSON)
+	assertPublicAgentBeforePublication(t, client, *env, entry)
 	binding := createEndpointBinding(t, client, *env, card)
 	challenge := createVerificationChallenge(t, client, env, binding.BindingID)
 	completeVerificationWithProof(t, client, *env, card, binding, challenge, challenge.Proof)
@@ -471,8 +486,84 @@ func registerAndPublish(t *testing.T, client *http.Client, env *acceptanceEnv, c
 	if published.PublishedAt == nil || published.VerificationMethod != "http_well_known" || published.VerificationEvidenceDigest == nil {
 		t.Fatalf("published Release %s = %#v", card.AgentID, published)
 	}
+	assertPublicAgentAfterPublication(t, client, *env, entry, published)
 	env.releases[card.AgentID] = published
+	env.publicAgentIDs[card.AgentID] = entry.PublicAgentID
 	return published
+}
+
+func assertPublicAgentBeforePublication(t *testing.T, client *http.Client, env acceptanceEnv, entry contracts.CatalogEntry) {
+	t.Helper()
+	result := doRequest(t, client, env.controlPlane+"/v4/public/agents/"+entry.PublicAgentID, http.MethodGet, "", "", nil)
+	if result.status != http.StatusOK || !bytes.Contains(result.body, []byte(`"availability":"not_installable"`)) || !bytes.Contains(result.body, []byte(`"releases":[]`)) {
+		t.Fatalf("pre-public public Agent status=%d body=%s", result.status, result.body)
+	}
+	for _, forbidden := range []string{`"card"`, `"protocol"`, `"endpoint"`, `"verificationEvidenceDigest"`, `"endpointBindingId"`} {
+		if bytes.Contains(result.body, []byte(forbidden)) {
+			t.Fatalf("pre-public public Agent leaked %s: %s", forbidden, result.body)
+		}
+	}
+}
+
+func assertPublicAgentAfterPublication(t *testing.T, client *http.Client, env acceptanceEnv, entry contracts.CatalogEntry, release contracts.AgentReleaseResponse) {
+	t.Helper()
+	result := doRequest(t, client, env.controlPlane+"/v4/public/agents/"+entry.PublicAgentID, http.MethodGet, "", "", nil)
+	if result.status != http.StatusOK {
+		t.Fatalf("public Agent status=%d body=%s", result.status, result.body)
+	}
+	var view contracts.PublicAgentShare
+	if err := json.Unmarshal(result.body, &view); err != nil {
+		t.Fatalf("decode public Agent share: %v body=%s", err, result.body)
+	}
+	if view.PublicAgentID != entry.PublicAgentID || view.PublicURL != entry.PublicURL || view.Availability != contracts.PublicAgentAvailabilityInstallable || len(view.Releases) != 1 || view.Releases[0].ReleaseID != release.ReleaseID || view.Releases[0].AgentCardVersion != release.AgentCardVersion || view.Releases[0].CardDigest != release.CardDigest {
+		t.Fatalf("public Release provenance=%#v release=%#v", view, release)
+	}
+	forbidden := []string{`"endpoint"`, `"endpointBindingId"`, `"endpointOrigin"`, `"endpointPath"`, `"verificationEvidenceDigest"`, release.EndpointOrigin}
+	if release.EndpointPath != "" && release.EndpointPath != "/" {
+		forbidden = append(forbidden, release.EndpointPath)
+	}
+	assertNoForbiddenBody(t, result.body, forbidden, "public Agent response")
+}
+
+func assertPublicAgentInputMatrix(t *testing.T, client *http.Client, env acceptanceEnv, entry contracts.CatalogEntry) {
+	t.Helper()
+	malformed := doRequest(t, client, env.controlPlane+"/v4/public/agents/not-an-agent-id", http.MethodGet, "", "", nil)
+	if malformed.status != http.StatusBadRequest {
+		t.Fatalf("malformed public Agent status=%d body=%s", malformed.status, malformed.body)
+	}
+	unknown := doRequest(t, client, env.controlPlane+"/v4/public/agents/agt_ffffffffffffffffffffffffffffffff", http.MethodGet, "", "", nil)
+	if unknown.status != http.StatusNotFound {
+		t.Fatalf("unknown public Agent status=%d body=%s", unknown.status, unknown.body)
+	}
+	if entry.PublicAgentID == "" {
+		t.Fatal("public Agent identity is empty")
+	}
+}
+
+func installFromPublicShare(t *testing.T, client *http.Client, env acceptanceEnv, workspaceID string, entry contracts.CatalogEntry, release contracts.AgentReleaseResponse) contracts.Installation {
+	t.Helper()
+	viewResult := doRequest(t, client, env.controlPlane+"/v4/public/agents/"+entry.PublicAgentID, http.MethodGet, "", "", nil)
+	if viewResult.status != http.StatusOK {
+		t.Fatalf("resolve public share for installation status=%d body=%s", viewResult.status, viewResult.body)
+	}
+	var view contracts.PublicAgentShare
+	if err := json.Unmarshal(viewResult.body, &view); err != nil || len(view.Releases) != 1 || view.Releases[0].ReleaseID != release.ReleaseID {
+		t.Fatalf("public exact Release selection=%#v err=%v", view, err)
+	}
+	selected := view.Releases[0]
+	acceptedPermissions := make([]string, 0, len(selected.Permissions))
+	for _, permission := range selected.Permissions {
+		acceptedPermissions = append(acceptedPermissions, permission.ID)
+	}
+	result := doRequest(t, client, env.controlPlane+fmt.Sprintf("/v3/workspaces/%s/installations", workspaceID), http.MethodPost, env.ownerToken, "application/json", map[string]any{"agentId": selected.AgentID, "versionConstraint": selected.AgentCardVersion, "acceptedPermissions": acceptedPermissions})
+	if result.status != http.StatusCreated {
+		t.Fatalf("public install status=%d body=%s", result.status, result.body)
+	}
+	var installation contracts.Installation
+	if err := json.Unmarshal(result.body, &installation); err != nil || installation.InstalledReleaseID != selected.ReleaseID || installation.InstalledVersion != selected.AgentCardVersion || installation.Status != "enabled" {
+		t.Fatalf("public Installation=%#v err=%v", installation, err)
+	}
+	return installation
 }
 
 func challengeService(t *testing.T, endpoint string) string {
@@ -690,6 +781,7 @@ func assertInstallationAndReleaseGates(t *testing.T, client *http.Client, env *a
 	if suspended.SuspendedAt == nil || suspended.RevokedAt != nil {
 		t.Fatalf("suspended Release=%#v", suspended)
 	}
+	assertPublicAgentNotInstallable(t, client, *env, env.publicAgentIDs[lifecycleRelease.AgentID])
 	suspendedResult := doRequest(t, client, env.controlPlane+"/v4/workspaces/"+acceptanceWorkspace+"/invocations", http.MethodPost, env.ownerToken, "application/json", map[string]any{"agentId": lifecycleRelease.AgentID, "capability": "runtime.echo", "input": map[string]any{"fixture": "success", "value": suspendedContent}, "stream": false})
 	if suspendedResult.status != http.StatusConflict {
 		t.Fatalf("suspended Release invocation status=%d body=%s", suspendedResult.status, suspendedResult.body)
@@ -700,11 +792,20 @@ func assertInstallationAndReleaseGates(t *testing.T, client *http.Client, env *a
 	if revoked.SuspendedAt == nil || revoked.RevokedAt == nil {
 		t.Fatalf("revoked Release=%#v", revoked)
 	}
+	assertPublicAgentNotInstallable(t, client, *env, env.publicAgentIDs[lifecycleRelease.AgentID])
 	revokedResult := doRequest(t, client, env.controlPlane+"/v4/workspaces/"+acceptanceWorkspace+"/invocations", http.MethodPost, env.ownerToken, "application/json", map[string]any{"agentId": lifecycleRelease.AgentID, "capability": "runtime.echo", "input": map[string]any{"fixture": "success", "value": revokedContent}, "stream": false})
 	if revokedResult.status != http.StatusConflict {
 		t.Fatalf("revoked Release invocation status=%d body=%s", revokedResult.status, revokedResult.body)
 	}
 	assertPreInvocationError(t, revokedResult, contracts.ErrorCodeAgentReleaseRevoked, env.forbidden)
+}
+
+func assertPublicAgentNotInstallable(t *testing.T, client *http.Client, env acceptanceEnv, publicAgentID string) {
+	t.Helper()
+	result := doRequest(t, client, env.controlPlane+"/v4/public/agents/"+publicAgentID, http.MethodGet, "", "", nil)
+	if result.status != http.StatusOK || !bytes.Contains(result.body, []byte(`"availability":"not_installable"`)) || !bytes.Contains(result.body, []byte(`"releases":[]`)) {
+		t.Fatalf("non-installable public Agent status=%d body=%s", result.status, result.body)
+	}
 }
 
 func configuredCredentialPrivateKey(t *testing.T, encoded string) ed25519.PrivateKey {
@@ -1087,6 +1188,9 @@ func assertNoForbiddenBody(t *testing.T, body []byte, forbidden []string, surfac
 
 func forbiddenBodyError(body []byte, forbidden []string, surface string) error {
 	for _, literal := range forbidden {
+		if literal == "" {
+			continue
+		}
 		if bytes.Contains(body, []byte(literal)) {
 			return fmt.Errorf("forbidden secret material appeared in %s", surface)
 		}
