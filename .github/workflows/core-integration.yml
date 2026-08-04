@@ -1,0 +1,193 @@
+name: Core integration
+
+on:
+  workflow_call:
+    inputs:
+      core_sha:
+        description: Full NeKiro Core commit SHA to assemble
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      core_sha:
+        description: Full NeKiro Core commit SHA to assemble
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: core-stack-${{ inputs.core_sha }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Check out canonical Stack
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: NeKiro-project/NeKiro-Stack
+          ref: main
+
+      - name: Set up Go
+        uses: actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Render exact Core manifest
+        shell: bash
+        env:
+          CORE_SHA: ${{ inputs.core_sha }}
+          PREPARED_MANIFEST: ${{ runner.temp }}/components-core-backend.json
+        run: |
+          if [[ ! "$CORE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo 'core_sha must be one full lowercase commit SHA.' >&2
+            exit 1
+          fi
+          go run ./cmd/manifest-validator -core-sha "$CORE_SHA" -format json components.json >"$PREPARED_MANIFEST"
+          go run ./cmd/manifest-validator "$PREPARED_MANIFEST"
+          printf 'NEKIRO_STACK_MANIFEST=%s\n' "$PREPARED_MANIFEST" >>"$GITHUB_ENV"
+
+      - name: Write backend acceptance environment
+        shell: bash
+        run: ./scripts/write-ci-env.sh backend "$GITHUB_ENV" "$GITHUB_WORKSPACE" "nekiro-core-backend-${GITHUB_RUN_ID}"
+
+      - name: Resolve exact components and build images
+        id: prepare
+        shell: bash
+        env:
+          PREPARED_ENV: ${{ runner.temp }}/nekiro-core-backend.env
+          WORK_ROOT: ${{ runner.temp }}/nekiro-core-backend
+        run: |
+          ./scripts/prepare.sh "$NEKIRO_STACK_MANIFEST" "$WORK_ROOT" "$PREPARED_ENV"
+          source "$PREPARED_ENV"
+          for name in NEKIRO_CONTROL_PLANE_IMAGE NEKIRO_A2A_ROUTER_IMAGE NEKIRO_RUNTIME_A_IMAGE NEKIRO_RUNTIME_B_IMAGE NEKIRO_STACK_CORE_DIR NEKIRO_STACK_CONSOLE_DIR NEKIRO_STACK_SDK_GO_DIR NEKIRO_STACK_SAMPLES_DIR NEKIRO_STACK_TRANSPORT_GO_DIR; do
+            printf '%s=%s\n' "$name" "${!name}" >>"$GITHUB_ENV"
+          done
+
+      - name: Start exact backend assembly
+        run: docker compose --project-name "$NEKIRO_E2E_COMPOSE_PROJECT" --file compose.yaml up --detach --wait --wait-timeout 120
+
+      - name: Run trusted publication Invoke-to-Record acceptance
+        run: go test -tags=e2e -count=1 ./tests/backend
+
+      - name: Report backend success
+        env:
+          CORE_SHA: ${{ inputs.core_sha }}
+        run: echo "::notice title=Core backend integration passed::The complete backend loop and Ledger lineage passed against Core ${CORE_SHA}."
+
+      - name: Capture sanitized backend logs
+        if: always() && steps.prepare.outcome == 'success'
+        shell: bash
+        run: docker compose --project-name "$NEKIRO_E2E_COMPOSE_PROJECT" --file compose.yaml logs --no-color 2>&1 | perl scripts/sanitize-logs.pl
+
+      - name: Tear down backend assembly
+        if: always() && steps.prepare.outcome == 'success'
+        run: docker compose --project-name "$NEKIRO_E2E_COMPOSE_PROJECT" --file compose.yaml down --volumes --remove-orphans
+
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Check out canonical Stack
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: NeKiro-project/NeKiro-Stack
+          ref: main
+
+      - name: Set up Go
+        uses: actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda
+        with:
+          version: 11.3.0
+          run_install: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24.16.0
+
+      - name: Render exact Core manifest
+        shell: bash
+        env:
+          CORE_SHA: ${{ inputs.core_sha }}
+          PREPARED_MANIFEST: ${{ runner.temp }}/components-core-browser.json
+        run: |
+          if [[ ! "$CORE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo 'core_sha must be one full lowercase commit SHA.' >&2
+            exit 1
+          fi
+          go run ./cmd/manifest-validator -core-sha "$CORE_SHA" -format json components.json >"$PREPARED_MANIFEST"
+          go run ./cmd/manifest-validator "$PREPARED_MANIFEST"
+          printf 'NEKIRO_STACK_MANIFEST=%s\n' "$PREPARED_MANIFEST" >>"$GITHUB_ENV"
+
+      - name: Write browser acceptance environment
+        shell: bash
+        run: ./scripts/write-ci-env.sh browser "$GITHUB_ENV" "$GITHUB_WORKSPACE" "nekiro-core-browser-${GITHUB_RUN_ID}"
+
+      - name: Resolve exact components and build images
+        id: prepare
+        shell: bash
+        env:
+          PREPARED_ENV: ${{ runner.temp }}/nekiro-core-browser.env
+          WORK_ROOT: ${{ runner.temp }}/nekiro-core-browser
+        run: |
+          ./scripts/prepare.sh "$NEKIRO_STACK_MANIFEST" "$WORK_ROOT" "$PREPARED_ENV"
+          source "$PREPARED_ENV"
+          for name in NEKIRO_CONTROL_PLANE_IMAGE NEKIRO_A2A_ROUTER_IMAGE NEKIRO_RUNTIME_A_IMAGE NEKIRO_RUNTIME_B_IMAGE NEKIRO_STACK_CORE_DIR NEKIRO_STACK_CONSOLE_DIR NEKIRO_STACK_SDK_GO_DIR NEKIRO_STACK_SAMPLES_DIR NEKIRO_STACK_TRANSPORT_GO_DIR; do
+            printf '%s=%s\n' "$name" "${!name}" >>"$GITHUB_ENV"
+          done
+
+      - name: Start exact browser assembly
+        run: docker compose --project-name "$NEKIRO_E2E_COMPOSE_PROJECT" --file compose.yaml up --detach --wait --wait-timeout 120
+
+      - name: Install exact Console dependencies
+        run: pnpm --dir "$NEKIRO_STACK_CONSOLE_DIR" install --frozen-lockfile
+
+      - name: Install Chromium
+        run: pnpm --dir "$NEKIRO_STACK_CONSOLE_DIR" exec playwright install --with-deps chromium
+
+      - name: Build exact production Console
+        run: pnpm --dir "$NEKIRO_STACK_CONSOLE_DIR" run build
+
+      - name: Run production browser acceptance
+        run: pnpm --dir "$NEKIRO_STACK_CONSOLE_DIR" run test:e2e
+
+      - name: Report browser success
+        env:
+          CORE_SHA: ${{ inputs.core_sha }}
+        run: echo "::notice title=Core browser integration passed::The production Console suite passed against Core ${CORE_SHA}."
+
+      - name: Capture sanitized browser logs
+        if: always() && steps.prepare.outcome == 'success'
+        shell: bash
+        run: docker compose --project-name "$NEKIRO_E2E_COMPOSE_PROJECT" --file compose.yaml logs --no-color 2>&1 | perl scripts/sanitize-logs.pl
+
+      - name: Tear down browser assembly
+        if: always() && steps.prepare.outcome == 'success'
+        run: docker compose --project-name "$NEKIRO_E2E_COMPOSE_PROJECT" --file compose.yaml down --volumes --remove-orphans
+
+  required:
+    if: always()
+    needs:
+      - backend
+      - browser
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require backend and browser integration
+        env:
+          BACKEND_RESULT: ${{ needs.backend.result }}
+          BROWSER_RESULT: ${{ needs.browser.result }}
+        run: |
+          test "$BACKEND_RESULT" = success
+          test "$BROWSER_RESULT" = success
