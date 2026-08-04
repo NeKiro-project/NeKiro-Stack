@@ -1,0 +1,258 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Set up Go
+        uses: actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Check formatting and module graph
+        shell: bash
+        run: |
+          test -z "$(gofmt -l .)"
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
+          go mod verify
+
+      - name: Build Stack tooling
+        run: go build ./...
+
+      - name: Test manifest contract
+        run: go test -count=1 ./internal/manifest
+
+      - name: Race test manifest contract
+        run: go test -race ./internal/manifest
+
+      - name: Vet
+        run: go vet ./...
+
+  manifest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Set up Go
+        uses: actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Validate exact component manifest
+        run: go run ./cmd/manifest-validator components.json
+
+      - name: Run negative manifest matrix
+        run: go test -count=1 ./internal/manifest -run 'Rejects|Resolution'
+
+  compose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Write explicit Compose validation environment
+        shell: bash
+        run: ./scripts/write-ci-env.sh compose "$GITHUB_ENV" "$GITHUB_WORKSPACE" "nekiro-stack-compose-${GITHUB_RUN_ID}"
+
+      - name: Validate source-free Compose
+        shell: bash
+        run: |
+          docker compose --file compose.yaml config --quiet
+          if grep -nE '^[[:space:]]+build:|image:[[:space:]].*(latest|:(main|master))([[:space:]"@]|$)' compose.yaml; then
+            echo 'Compose contains a source build or floating image.' >&2
+            exit 1
+          fi
+
+  backend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Check out Stack
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Set up Go
+        uses: actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Write backend acceptance environment
+        shell: bash
+        run: ./scripts/write-ci-env.sh backend "$GITHUB_ENV" "$GITHUB_WORKSPACE" "nekiro-stack-backend-${GITHUB_RUN_ID}"
+
+      - name: Resolve exact components and build images
+        id: prepare
+        shell: bash
+        env:
+          PREPARED_ENV: ${{ runner.temp }}/nekiro-stack-backend.env
+          WORK_ROOT: ${{ runner.temp }}/nekiro-stack-backend
+        run: |
+          ./scripts/prepare.sh "$GITHUB_WORKSPACE/components.json" "$WORK_ROOT" "$PREPARED_ENV"
+          source "$PREPARED_ENV"
+          for name in NEKIRO_CONTROL_PLANE_IMAGE NEKIRO_A2A_ROUTER_IMAGE NEKIRO_RUNTIME_A_IMAGE NEKIRO_RUNTIME_B_IMAGE NEKIRO_STACK_CORE_DIR NEKIRO_STACK_CONSOLE_DIR NEKIRO_STACK_SDK_GO_DIR NEKIRO_STACK_SAMPLES_DIR NEKIRO_STACK_TRANSPORT_GO_DIR; do
+            printf '%s=%s\n' "$name" "${!name}" >>"$GITHUB_ENV"
+          done
+          printf 'NEKIRO_STACK_PREPARED_ENV=%s\n' "$PREPARED_ENV" >>"$GITHUB_ENV"
+
+      - name: Start fresh exact backend assembly
+        run: docker compose --project-name "$NEKIRO_E2E_COMPOSE_PROJECT" --file compose.yaml up --detach --wait --wait-timeout 120
+
+      - name: Run trusted publication Invoke-to-Record acceptance
+        run: go test -tags=e2e -count=1 ./tests/backend
+
+      - name: Capture sanitized backend logs
+        if: always() && steps.prepare.outcome == 'success'
+        shell: bash
+        run: docker compose --project-name "$NEKIRO_E2E_COMPOSE_PROJECT" --file compose.yaml logs --no-color 2>&1 | perl scripts/sanitize-logs.pl
+
+      - name: Tear down backend assembly
+        if: always() && steps.prepare.outcome == 'success'
+        run: docker compose --project-name "$NEKIRO_E2E_COMPOSE_PROJECT" --file compose.yaml down --volumes --remove-orphans
+
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Check out Stack
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Set up Go
+        uses: actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda
+        with:
+          version: 11.3.0
+          run_install: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24.16.0
+
+      - name: Write browser acceptance environment
+        shell: bash
+        run: ./scripts/write-ci-env.sh browser "$GITHUB_ENV" "$GITHUB_WORKSPACE" "nekiro-stack-browser-${GITHUB_RUN_ID}"
+
+      - name: Resolve exact components and build images
+        id: prepare
+        shell: bash
+        env:
+          PREPARED_ENV: ${{ runner.temp }}/nekiro-stack-browser.env
+          WORK_ROOT: ${{ runner.temp }}/nekiro-stack-browser
+        run: |
+          ./scripts/prepare.sh "$GITHUB_WORKSPACE/components.json" "$WORK_ROOT" "$PREPARED_ENV"
+          source "$PREPARED_ENV"
+          for name in NEKIRO_CONTROL_PLANE_IMAGE NEKIRO_A2A_ROUTER_IMAGE NEKIRO_RUNTIME_A_IMAGE NEKIRO_RUNTIME_B_IMAGE NEKIRO_STACK_CORE_DIR NEKIRO_STACK_CONSOLE_DIR NEKIRO_STACK_SDK_GO_DIR NEKIRO_STACK_SAMPLES_DIR NEKIRO_STACK_TRANSPORT_GO_DIR; do
+            printf '%s=%s\n' "$name" "${!name}" >>"$GITHUB_ENV"
+          done
+          printf 'NEKIRO_STACK_PREPARED_ENV=%s\n' "$PREPARED_ENV" >>"$GITHUB_ENV"
+
+      - name: Start fresh exact browser assembly
+        run: docker compose --project-name "$NEKIRO_E2E_COMPOSE_PROJECT" --file compose.yaml up --detach --wait --wait-timeout 120
+
+      - name: Install exact Console dependencies
+        shell: bash
+        run: pnpm --dir "$NEKIRO_STACK_CONSOLE_DIR" install --frozen-lockfile
+
+      - name: Install Chromium
+        shell: bash
+        run: pnpm --dir "$NEKIRO_STACK_CONSOLE_DIR" exec playwright install --with-deps chromium
+
+      - name: Build exact production Console
+        shell: bash
+        run: pnpm --dir "$NEKIRO_STACK_CONSOLE_DIR" run build
+
+      - name: Run production browser acceptance
+        shell: bash
+        run: pnpm --dir "$NEKIRO_STACK_CONSOLE_DIR" run test:e2e
+
+      - name: Capture sanitized browser logs
+        if: always() && steps.prepare.outcome == 'success'
+        shell: bash
+        run: docker compose --project-name "$NEKIRO_E2E_COMPOSE_PROJECT" --file compose.yaml logs --no-color 2>&1 | perl scripts/sanitize-logs.pl
+
+      - name: Tear down browser assembly
+        if: always() && steps.prepare.outcome == 'success'
+        run: docker compose --project-name "$NEKIRO_E2E_COMPOSE_PROJECT" --file compose.yaml down --volumes --remove-orphans
+
+  security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Verify ownership, license, and immutable inputs
+        shell: bash
+        run: |
+          test -s LICENSE
+          test -s README.md
+          test -s components.json
+          for path in apps agents sdks src deploy tests/e2e; do
+            test ! -e "$path"
+          done
+          if grep -nE '^[[:space:]]+build:|image:[[:space:]].*(latest|:(main|master))([[:space:]"@]|$)' compose.yaml; then
+            echo 'Compose contains a source build or floating image.' >&2
+            exit 1
+          fi
+          if git grep -nE 'uses:[[:space:]]+[^[:space:]]+@v[0-9]' -- .github/workflows; then
+            echo 'GitHub Action is not pinned to a full commit SHA.' >&2
+            exit 1
+          fi
+          if git grep -nEI -- '-----BEGIN (RSA |EC |OPENSSH |DSA |)?PRIVATE KEY-----|gh[pousr]_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}'; then
+            echo 'Credential-like material is tracked.' >&2
+            exit 1
+          fi
+
+  required:
+    if: always()
+    needs:
+      - quality
+      - manifest
+      - compose
+      - backend
+      - browser
+      - security
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every CI gate
+        env:
+          QUALITY_RESULT: ${{ needs.quality.result }}
+          MANIFEST_RESULT: ${{ needs.manifest.result }}
+          COMPOSE_RESULT: ${{ needs.compose.result }}
+          BACKEND_RESULT: ${{ needs.backend.result }}
+          BROWSER_RESULT: ${{ needs.browser.result }}
+          SECURITY_RESULT: ${{ needs.security.result }}
+        shell: bash
+        run: |
+          for result in "$QUALITY_RESULT" "$MANIFEST_RESULT" "$COMPOSE_RESULT" "$BACKEND_RESULT" "$BROWSER_RESULT" "$SECURITY_RESULT"; do
+            test "$result" = success
+          done

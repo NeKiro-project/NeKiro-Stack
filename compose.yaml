@@ -24,9 +24,7 @@ services:
       start_period: 10s
 
   control-plane-migrate:
-    build:
-      context: ..
-      dockerfile: apps/control-plane/Dockerfile
+    image: "${NEKIRO_CONTROL_PLANE_IMAGE:?NEKIRO_CONTROL_PLANE_IMAGE must be set to the prepared immutable image}"
     command: ["migrate", "up"]
     environment:
       NEKIRO_DATABASE_URL: "${NEKIRO_COMPOSE_DATABASE_URL:?NEKIRO_COMPOSE_DATABASE_URL must be set and non-empty}"
@@ -38,9 +36,7 @@ services:
     restart: "no"
 
   control-plane:
-    build:
-      context: ..
-      dockerfile: apps/control-plane/Dockerfile
+    image: "${NEKIRO_CONTROL_PLANE_IMAGE:?NEKIRO_CONTROL_PLANE_IMAGE must be set to the prepared immutable image}"
     environment:
       NEKIRO_DATABASE_URL: "${NEKIRO_COMPOSE_DATABASE_URL:?NEKIRO_COMPOSE_DATABASE_URL must be set and non-empty}"
       NEKIRO_LISTEN_ADDRESS: "0.0.0.0:8080"
@@ -76,9 +72,7 @@ services:
       start_period: 5s
 
   a2a-router-migrate:
-    build:
-      context: ..
-      dockerfile: apps/a2a-router/Dockerfile
+    image: "${NEKIRO_A2A_ROUTER_IMAGE:?NEKIRO_A2A_ROUTER_IMAGE must be set to the prepared immutable image}"
     command: ["migrate", "up"]
     environment:
       NEKIRO_DATABASE_URL: "${NEKIRO_COMPOSE_DATABASE_URL:?NEKIRO_COMPOSE_DATABASE_URL must be set and non-empty}"
@@ -90,9 +84,7 @@ services:
     restart: "no"
 
   a2a-router:
-    build:
-      context: ..
-      dockerfile: apps/a2a-router/Dockerfile
+    image: "${NEKIRO_A2A_ROUTER_IMAGE:?NEKIRO_A2A_ROUTER_IMAGE must be set to the prepared immutable image}"
     command: ["serve"]
     environment:
       NEKIRO_ROUTER_LISTEN_ADDRESS: "0.0.0.0:8081"
@@ -132,9 +124,7 @@ services:
       start_period: 5s
 
   runtime-b:
-    build:
-      context: ..
-      dockerfile: agents/runtime-b/Dockerfile
+    image: "${NEKIRO_RUNTIME_B_IMAGE:?NEKIRO_RUNTIME_B_IMAGE must be set to the prepared immutable image}"
     environment:
       RUNTIME_B_LISTEN_ADDR: "0.0.0.0:8092"
       RUNTIME_B_AGENT_ID: "runtime-b"
@@ -162,9 +152,7 @@ services:
       start_period: 5s
 
   runtime-a:
-    build:
-      context: ..
-      dockerfile: agents/runtime-a/Dockerfile
+    image: "${NEKIRO_RUNTIME_A_IMAGE:?NEKIRO_RUNTIME_A_IMAGE must be set to the prepared immutable image}"
     environment:
       RUNTIME_A_LISTEN_ADDR: "0.0.0.0:8091"
       RUNTIME_A_AGENT_ID: "runtime-a"

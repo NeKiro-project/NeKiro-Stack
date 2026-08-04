@@ -1,0 +1,10 @@
+*.exe
+*.test
+*.out
+vendor/
+.stack-work/
+.env
+.idea/
+.vscode/
+Thumbs.db
+.DS_Store
