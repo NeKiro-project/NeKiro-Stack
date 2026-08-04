@@ -21,6 +21,30 @@ func TestValidManifest(t *testing.T) {
 	}
 }
 
+func TestManifestCoreOverrideUpdatesCommitAndContractIdentity(t *testing.T) {
+	value := validManifest()
+	commitSHA := strings.Repeat("f", 40)
+	overridden, err := value.WithCoreCommit(commitSHA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if overridden.Components.Core.CommitSHA != commitSHA {
+		t.Fatalf("Core commit = %q", overridden.Components.Core.CommitSHA)
+	}
+	if overridden.ContractIdentity != "NeKiro/contracts@"+commitSHA {
+		t.Fatalf("contract identity = %q", overridden.ContractIdentity)
+	}
+	if overridden.Components.Samples.CommitSHA != value.Components.Samples.CommitSHA {
+		t.Fatal("Core override changed a satellite component")
+	}
+}
+
+func TestManifestCoreOverrideRejectsNonCommitReference(t *testing.T) {
+	if _, err := validManifest().WithCoreCommit("main"); err == nil {
+		t.Fatal("floating Core override was accepted")
+	}
+}
+
 func TestManifestRejectsMissingMalformedFloatingAndLocalComponents(t *testing.T) {
 	tests := []struct {
 		name   string

@@ -18,6 +18,18 @@ go run ./cmd/manifest-validator components.json
 go test ./internal/manifest
 ```
 
+To validate an unreleased or newly merged Core commit without changing the
+tracked release manifest, render a temporary immutable manifest:
+
+```text
+go run ./cmd/manifest-validator -core-sha <40-character-core-sha> -format json components.json > prepared-core.json
+go run ./cmd/manifest-validator prepared-core.json
+```
+
+The override updates both `components.core.commitSha` and
+`contractIdentity`; every other component remains at its tracked immutable
+revision.
+
 ## Prepare exact images
 
 Preparation requires Git, Go, Docker, Bash, and network access to the public
@@ -48,6 +60,26 @@ docker compose --project-name nekiro-stack --file compose.yaml up --detach --wai
 go test -tags=e2e -count=1 ./tests/backend
 ```
 
+## Test matrix and success signals
+
+| Check | Command or workflow | Successful result |
+|---|---|---|
+| Manifest | `go run ./cmd/manifest-validator components.json` | All five component owners and immutable revisions validate |
+| Compose | `docker compose --file compose.yaml config --quiet` | Configuration exits `0` with no `build:` or floating image |
+| Backend acceptance | `go test -tags=e2e -count=1 ./tests/backend` | Register → publish → discover → install → invoke → record passes, including cross-runtime lineage |
+| Browser acceptance | Console `pnpm test:e2e` in Stack CI | Every production Console scenario passes through the live Gateway |
+
+A healthy container set alone is not acceptance. Backend success requires the
+trusted publication loop, Router-mediated Runtime A/Runtime B invocation, and
+queryable committed Ledger lineage. Browser success additionally requires the
+exact production Console build to pass its Playwright suite against that same
+assembly.
+
+The `Core integration` reusable workflow accepts a full Core commit SHA,
+renders a temporary immutable manifest, and runs both backend and browser
+acceptance. Core calls it after every merge to `main`; the tracked Stack
+manifest is not silently rewritten by that compatibility run.
+
 Production Compose contains no `build:` block. Browser acceptance runs from
 the exact Console checkout prepared from the manifest, against the same
 Gateway-only route used by production.
@@ -60,6 +92,13 @@ docker compose --project-name nekiro-stack --file compose.yaml down --volumes --
 
 The preparation work directory remains caller-owned and is never deleted by a
 script. Remove it only after checking the exact absolute path.
+
+## Pull requests
+
+Pull requests must list every component revision changed, why the revisions
+are mutually compatible, which backend/browser checks ran, and the observed
+success signals. A green manifest-only check is not evidence that the product
+loop passed.
 
 ## Provenance
 

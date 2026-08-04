@@ -136,6 +136,21 @@ func (value Manifest) Validate() error {
 	return nil
 }
 
+// WithCoreCommit returns a validated manifest targeting one exact Core
+// revision. It updates the contract identity together with the Core component
+// so cross-repository acceptance cannot claim a different contract source.
+func (value Manifest) WithCoreCommit(commitSHA string) (Manifest, error) {
+	if !commitPattern.MatchString(commitSHA) {
+		return Manifest{}, errors.New("Core override must be one full lowercase commit SHA")
+	}
+	value.ContractIdentity = "NeKiro/contracts@" + commitSHA
+	value.Components.Core.CommitSHA = commitSHA
+	if err := value.Validate(); err != nil {
+		return Manifest{}, fmt.Errorf("validate Core override: %w", err)
+	}
+	return value, nil
+}
+
 func (value Manifest) Ordered() []NamedComponent {
 	return []NamedComponent{
 		{Name: "core", Component: value.Components.Core},

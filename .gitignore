@@ -1,10 +1,29 @@
+bin/
+coverage/
+coverage.out
 *.exe
 *.test
 *.out
+*.prof
 vendor/
 .stack-work/
+
+# Local configuration, prepared manifests, and logs
 .env
+.env.*
+!.env.example
+*.log
+prepared-*.json
+
+# Browser-test output from exact Console checkouts
+test-results/
+playwright-report/
+
+# Editors and operating systems
 .idea/
 .vscode/
 Thumbs.db
 .DS_Store
+
+# Linked worktrees
+.worktrees/

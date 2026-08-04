@@ -1,6 +1,7 @@
 name: CI
 
 on:
+  workflow_dispatch:
   pull_request:
   push:
     branches:
@@ -46,6 +47,9 @@ jobs:
 
       - name: Vet
         run: go vet ./...
+
+      - name: Check patch whitespace
+        run: git diff --check
 
   manifest:
     runs-on: ubuntu-latest
@@ -215,6 +219,8 @@ jobs:
           test -s LICENSE
           test -s README.md
           test -s components.json
+          test -s .github/pull_request_template.md
+          test -s .github/workflows/core-integration.yml
           for path in apps agents sdks src deploy tests/e2e; do
             test ! -e "$path"
           done
@@ -222,8 +228,8 @@ jobs:
             echo 'Compose contains a source build or floating image.' >&2
             exit 1
           fi
-          if git grep -nE 'uses:[[:space:]]+[^[:space:]]+@v[0-9]' -- .github/workflows; then
-            echo 'GitHub Action is not pinned to a full commit SHA.' >&2
+          if git grep -nE '^[[:space:]]*uses:' -- .github/workflows | grep -Ev '@[0-9a-f]{40}([[:space:]]|$)'; then
+            echo 'GitHub Action or reusable workflow is not pinned to a full commit SHA.' >&2
             exit 1
           fi
           if git grep -nEI -- '-----BEGIN (RSA |EC |OPENSSH |DSA |)?PRIVATE KEY-----|gh[pousr]_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}'; then
