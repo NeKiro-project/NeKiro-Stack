@@ -1,0 +1,64 @@
+site_name: NeKiro Stack RepoWiki
+site_url: https://nekiro-project.github.io/NeKiro-Stack/
+repo_url: https://github.com/NeKiro-project/NeKiro-Stack
+repo_name: NeKiro-project/NeKiro-Stack
+edit_uri: edit/main/
+docs_dir: .repowiki-site
+
+nav:
+  - Overview: index.md
+  - Source documentation:
+      - Index: source-docs/index.md
+      - Stack README: source-docs/overview.md
+
+plugins:
+  - search
+  - i18n:
+      docs_structure: folder
+      reconfigure_material: true
+      languages:
+        - locale: en
+          name: English
+          build: true
+          default: true
+        - locale: zh
+          name: 中文
+          build: true
+          nav:
+            - 概览: index.md
+            - 源文档:
+                - 索引: source-docs/index.md
+                - Stack README: source-docs/overview.md
+
+theme:
+  name: material
+  features:
+    - content.code.copy
+    - navigation.footer
+    - navigation.tabs
+    - search.suggest
+    - search.share
+  palette:
+    - scheme: default
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+
+markdown_extensions:
+  - admonition
+  - pymdownx.highlight:
+      anchor_linenums: true
+      linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences
+  - mdx_truly_sane_lists
+
+extra_css:
+  - assets/stylesheets/extra.css

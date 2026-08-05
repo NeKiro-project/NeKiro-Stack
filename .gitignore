@@ -27,3 +27,6 @@ Thumbs.db
 
 # Linked worktrees
 .worktrees/
+.repowiki-site/
+site/
+scripts/__pycache__/
