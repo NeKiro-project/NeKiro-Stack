@@ -93,6 +93,12 @@ docker compose --project-name nekiro-stack --file compose.yaml down --volumes --
 The preparation work directory remains caller-owned and is never deleted by a
 script. Remove it only after checking the exact absolute path.
 
+## RepoWiki
+
+The [NeKiro Stack RepoWiki](https://nekiro-project.github.io/NeKiro-Stack/)
+publishes the Stack documentation in English and Chinese with MkDocs Material.
+The source README remains canonical.
+
 ## Pull requests
 
 Pull requests must list every component revision changed, why the revisions

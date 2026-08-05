@@ -1,0 +1,15 @@
+.source-note {
+  margin: 0 0 1.5rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid #b7c7e8;
+  border-radius: 0.4rem;
+  background: #eef4ff;
+  color: #263b68;
+  font-size: 0.85rem;
+}
+
+[data-md-color-scheme="slate"] .source-note {
+  border-color: #415a9c;
+  background: #1d2a4b;
+  color: #dce7ff;
+}
