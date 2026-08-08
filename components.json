@@ -1,10 +1,10 @@
 {
   "schemaVersion": "1",
-  "contractIdentity": "NeKiro/contracts@ce3f6c4881d3d08abfe65ac3da2e0bfa37561f74",
+  "contractIdentity": "NeKiro/contracts@e883ad4bcfaf75ffe80e9d9e6fb79b2a8c58b18c",
   "components": {
     "core": {
       "repository": "NeKiro-project/NeKiro",
-      "commitSha": "ce3f6c4881d3d08abfe65ac3da2e0bfa37561f74"
+      "commitSha": "e883ad4bcfaf75ffe80e9d9e6fb79b2a8c58b18c"
     },
     "console": {
       "repository": "NeKiro-project/NeKiro-Console",

@@ -3,7 +3,7 @@ module github.com/NeKiro-project/NeKiro-Stack
 go 1.26.0
 
 require (
-	github.com/NeKiro-project/NeKiro v0.0.0-20260808043100-ce3f6c4881d3
+	github.com/NeKiro-project/NeKiro v0.0.0-20260808045545-e883ad4bcfaf
 	github.com/jackc/pgx/v5 v5.10.0
 )
 
