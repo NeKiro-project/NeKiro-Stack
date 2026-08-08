@@ -321,8 +321,11 @@ func publishRouterInstanceDirectory(t *testing.T, env acceptanceEnv) {
 	const leaf = "cfg-v1-cm91dGVyL2luc3RhbmNlLWRpcmVjdG9yeQ.value"
 	temporary := filepath.Join(env.configCenterRoot, leaf+".tmp")
 	destination := filepath.Join(env.configCenterRoot, leaf)
-	if err := os.WriteFile(temporary, payload, 0o600); err != nil {
+	if err := os.WriteFile(temporary, payload, 0o644); err != nil {
 		t.Fatalf("write Router instance directory: %v", err)
+	}
+	if err := os.Chmod(temporary, 0o644); err != nil {
+		t.Fatalf("make Router instance directory readable by the Router container: %v", err)
 	}
 	if err := os.Rename(temporary, destination); err != nil {
 		t.Fatalf("publish Router instance directory: %v", err)
