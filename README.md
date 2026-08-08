@@ -60,6 +60,16 @@ docker compose --project-name nekiro-stack --file compose.yaml up --detach --wai
 go test -tags=e2e -count=1 ./tests/backend
 ```
 
+`NEKIRO_ROUTER_INSTANCE_ROUTING_MODE` must be either `direct` or
+`config_center_file`; there is no automatic fallback between them. File mode
+reads the exact Release-scoped `router-instance-directory.v1` document from
+the absolute host directory named by `NEKIRO_ROUTER_CONFIG_CENTER_ROOT`.
+Missing, malformed, empty, or ambiguous instance data makes new Invocations
+fail closed. The backend acceptance scenario publishes one ready Runtime B
+replica into that directory and verifies both JSON and SSE dispatch to its
+reported instance ID. Compose and browser scenarios select `direct`
+explicitly because instance-directory behavior is outside those checks.
+
 ## Test matrix and success signals
 
 | Check | Command or workflow | Successful result |
