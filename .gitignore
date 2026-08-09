@@ -29,4 +29,5 @@ Thumbs.db
 .worktrees/
 .repowiki-site/
 site/
+.runtime-config/
 scripts/__pycache__/

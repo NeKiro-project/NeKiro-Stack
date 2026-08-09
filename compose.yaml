@@ -106,6 +106,13 @@ services:
       NEKIRO_ROUTER_AGENT_CREDENTIAL_KEY_ID: "${NEKIRO_ROUTER_AGENT_CREDENTIAL_KEY_ID:?NEKIRO_ROUTER_AGENT_CREDENTIAL_KEY_ID must be set and non-empty}"
       NEKIRO_ROUTER_AGENT_CREDENTIAL_PRIVATE_KEY_BASE64URL: "${NEKIRO_ROUTER_AGENT_CREDENTIAL_PRIVATE_KEY_BASE64URL:?NEKIRO_ROUTER_AGENT_CREDENTIAL_PRIVATE_KEY_BASE64URL must be set and non-empty}"
       NEKIRO_ROUTER_AGENT_CREDENTIAL_TTL_SECONDS: "${NEKIRO_ROUTER_AGENT_CREDENTIAL_TTL_SECONDS:?NEKIRO_ROUTER_AGENT_CREDENTIAL_TTL_SECONDS must be set and non-empty}"
+      NEKIRO_ROUTER_INSTANCE_ROUTING_MODE: "${NEKIRO_ROUTER_INSTANCE_ROUTING_MODE:?NEKIRO_ROUTER_INSTANCE_ROUTING_MODE must be set and non-empty}"
+      NEKIRO_ROUTER_CONFIG_CENTER_FILE_ROOT: "/var/lib/nekiro/config"
+      NEKIRO_ROUTER_CONFIG_CENTER_MAX_PAYLOAD_BYTES: "${NEKIRO_ROUTER_CONFIG_CENTER_MAX_PAYLOAD_BYTES:?NEKIRO_ROUTER_CONFIG_CENTER_MAX_PAYLOAD_BYTES must be set and non-empty}"
+      NEKIRO_ROUTER_INSTANCE_DIRECTORY_KEY: "${NEKIRO_ROUTER_INSTANCE_DIRECTORY_KEY:?NEKIRO_ROUTER_INSTANCE_DIRECTORY_KEY must be set and non-empty}"
+      NEKIRO_ROUTER_INSTANCE_PORT_NAME: "${NEKIRO_ROUTER_INSTANCE_PORT_NAME:?NEKIRO_ROUTER_INSTANCE_PORT_NAME must be set and non-empty}"
+    volumes:
+      - "${NEKIRO_ROUTER_CONFIG_CENTER_ROOT:?NEKIRO_ROUTER_CONFIG_CENTER_ROOT must be set and non-empty}:/var/lib/nekiro/config"
     ports:
       - "127.0.0.1:${A2A_ROUTER_PORT:?A2A_ROUTER_PORT must be set and non-empty}:8081"
     depends_on:
@@ -128,6 +135,36 @@ services:
     environment:
       RUNTIME_B_LISTEN_ADDR: "0.0.0.0:8092"
       RUNTIME_B_AGENT_ID: "runtime-b"
+      RUNTIME_B_INSTANCE_ID: "runtime-b-primary"
+      RUNTIME_B_ROUTER_URL: "http://a2a-router:8081"
+      RUNTIME_B_ROUTER_TOKEN: "${RUNTIME_B_ROUTER_TOKEN:?RUNTIME_B_ROUTER_TOKEN must be set and non-empty}"
+      RUNTIME_B_TARGET_AGENT_ID: "runtime-a"
+      RUNTIME_B_TARGET_CAPABILITY: "runtime.echo"
+      RUNTIME_B_RESPONSE_LIMIT_BYTES: "${RUNTIME_B_RESPONSE_LIMIT_BYTES:?RUNTIME_B_RESPONSE_LIMIT_BYTES must be set and non-empty}"
+      RUNTIME_B_EVENT_LIMIT_BYTES: "${RUNTIME_B_EVENT_LIMIT_BYTES:?RUNTIME_B_EVENT_LIMIT_BYTES must be set and non-empty}"
+      NEKIRO_AGENT_CHALLENGE_DIRECTORY: "/tmp/nekiro-challenges"
+      NEKIRO_AGENT_ROUTER_ISSUER: "${NEKIRO_AGENT_ROUTER_ISSUER:?NEKIRO_AGENT_ROUTER_ISSUER must be set and non-empty}"
+      NEKIRO_AGENT_ROUTER_AUDIENCE: "http://runtime-b:8092"
+      NEKIRO_AGENT_ROUTER_KEY_ID: "${NEKIRO_AGENT_ROUTER_KEY_ID:?NEKIRO_AGENT_ROUTER_KEY_ID must be set and non-empty}"
+      NEKIRO_AGENT_ROUTER_PUBLIC_KEY_BASE64URL: "${NEKIRO_AGENT_ROUTER_PUBLIC_KEY_BASE64URL:?NEKIRO_AGENT_ROUTER_PUBLIC_KEY_BASE64URL must be set and non-empty}"
+    depends_on:
+      a2a-router:
+        condition: service_healthy
+    networks:
+      - platform-internal
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8092/readyz"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+
+  runtime-b-directory:
+    image: "${NEKIRO_RUNTIME_B_IMAGE:?NEKIRO_RUNTIME_B_IMAGE must be set to the prepared immutable image}"
+    environment:
+      RUNTIME_B_LISTEN_ADDR: "0.0.0.0:8092"
+      RUNTIME_B_AGENT_ID: "runtime-b"
+      RUNTIME_B_INSTANCE_ID: "runtime-b-directory"
       RUNTIME_B_ROUTER_URL: "http://a2a-router:8081"
       RUNTIME_B_ROUTER_TOKEN: "${RUNTIME_B_ROUTER_TOKEN:?RUNTIME_B_ROUTER_TOKEN must be set and non-empty}"
       RUNTIME_B_TARGET_AGENT_ID: "runtime-a"

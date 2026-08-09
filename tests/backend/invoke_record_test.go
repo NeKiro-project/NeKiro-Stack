@@ -49,6 +49,7 @@ type acceptanceEnv struct {
 	databaseURL         string
 	composeFile         string
 	composeProject      string
+	configCenterRoot    string
 	challengeTTL        time.Duration
 	credentialIssuer    string
 	credentialKeyID     string
@@ -136,6 +137,7 @@ func TestInvokeToRecordAcceptance(t *testing.T) {
 	registerAndPublish(t, client, &env, runtimeTimeout)
 	registerAndPublish(t, client, &env, runtimeInterrupted)
 	runtimeLifecycleRelease := registerAndPublish(t, client, &env, runtimeLifecycle)
+	publishRouterInstanceDirectory(t, env)
 	assertPublicAgentInputMatrix(t, client, env, contracts.CatalogEntry{PublicAgentID: env.publicAgentIDs["runtime-a"], PublicURL: env.publicAgentOrigin + "/a/" + env.publicAgentIDs["runtime-a"]})
 	assertVerificationFailureMatrix(t, client, &env)
 
@@ -157,15 +159,19 @@ func TestInvokeToRecordAcceptance(t *testing.T) {
 	assertUnpublishedReleaseRejected(t, client, &env)
 	assertRouterCredentialFailureMatrix(t, client, &env, runtimeBRelease)
 
-	direct := invokeJSON(t, client, env, "runtime-b", "runtime.echo", map[string]any{"fixture": "success", "value": "direct-json-value"})
-	if direct.result.Status != "succeeded" || !bytes.Contains(direct.result.Result, []byte("direct-json-value")) {
-		t.Fatalf("direct JSON result=%s", direct.result.Result)
+	runtimeBResult := invokeJSON(t, client, env, "runtime-b", "runtime.echo", map[string]any{"fixture": "success", "value": "direct-json-value"})
+	if runtimeBResult.result.Status != "succeeded" || !bytes.Contains(runtimeBResult.result.Result, []byte("direct-json-value")) || !bytes.Contains(runtimeBResult.result.Result, []byte(`"instanceId":"runtime-b-directory"`)) {
+		t.Fatalf("Runtime B JSON result=%s", runtimeBResult.result.Result)
 	}
-	assertRecord(t, client, env, direct.result.InvocationID, acceptanceWorkspace, "runtime-b", "succeeded", "")
+	assertRecord(t, client, env, runtimeBResult.result.InvocationID, acceptanceWorkspace, "runtime-b", "succeeded", "")
 
 	stream := invokeSSE(t, client, env, "runtime-b", "runtime.echo", map[string]any{"fixture": "stream-success", "value": "direct-sse-value"})
 	if len(stream) < 3 || stream[0].Type != contracts.ResultStreamEventAccepted || stream[len(stream)-1].Type != contracts.ResultStreamEventCompleted {
 		t.Fatalf("SSE sequence=%#v", stream)
+	}
+	encodedStream, err := json.Marshal(stream)
+	if err != nil || !bytes.Contains(encodedStream, []byte(`"instanceId":"runtime-b-directory"`)) {
+		t.Fatalf("SSE did not remain on directory instance: %s error=%v", encodedStream, err)
 	}
 	for index, event := range stream {
 		if event.Sequence != int64(index) || event.InvocationID == "" || event.RootTaskID == "" || event.TraceID == "" {
@@ -245,6 +251,10 @@ func loadAcceptanceEnv(t *testing.T) acceptanceEnv {
 	if !filepath.IsAbs(composeFile) {
 		t.Fatalf("NEKIRO_E2E_COMPOSE_FILE must be an absolute path")
 	}
+	configCenterRoot := requiredEnv(t, "NEKIRO_E2E_CONFIG_CENTER_ROOT")
+	if !filepath.IsAbs(configCenterRoot) {
+		t.Fatalf("NEKIRO_E2E_CONFIG_CENTER_ROOT must be an absolute path")
+	}
 	ttlSeconds, err := strconv.ParseInt(requiredEnv(t, "NEKIRO_ENDPOINT_CHALLENGE_TTL_SECONDS"), 10, 64)
 	if err != nil || ttlSeconds < 2 || ttlSeconds > 15 {
 		t.Fatalf("NEKIRO_ENDPOINT_CHALLENGE_TTL_SECONDS must be an acceptance value from 2 through 15 seconds")
@@ -260,12 +270,65 @@ func loadAcceptanceEnv(t *testing.T) acceptanceEnv {
 		databaseURL:       requiredEnv(t, "NEKIRO_E2E_DATABASE_URL"),
 		composeFile:       composeFile,
 		composeProject:    requiredEnv(t, "NEKIRO_E2E_COMPOSE_PROJECT"),
+		configCenterRoot:  configCenterRoot,
 		challengeTTL:      time.Duration(ttlSeconds) * time.Second,
 		credentialIssuer:  requiredEnv(t, "NEKIRO_ROUTER_AGENT_CREDENTIAL_ISSUER"),
 		credentialKeyID:   requiredEnv(t, "NEKIRO_ROUTER_AGENT_CREDENTIAL_KEY_ID"),
 		credentialPrivate: requiredEnv(t, "NEKIRO_ROUTER_AGENT_CREDENTIAL_PRIVATE_KEY_BASE64URL"),
 		releases:          make(map[string]contracts.AgentReleaseResponse),
 		publicAgentIDs:    make(map[string]string),
+	}
+}
+
+func publishRouterInstanceDirectory(t *testing.T, env acceptanceEnv) {
+	t.Helper()
+	agentIDs := make([]string, 0, len(env.releases))
+	for agentID := range env.releases {
+		agentIDs = append(agentIDs, agentID)
+	}
+	sort.Strings(agentIDs)
+	document := contracts.RouterInstanceDirectoryV1{SchemaVersion: contracts.RouterInstanceDirectorySchemaVersion, Revision: "stack-runtime-1", Targets: make([]contracts.RouterInstanceDirectoryTargetV1, 0, len(agentIDs))}
+	for _, agentID := range agentIDs {
+		release := env.releases[agentID]
+		origin, err := url.Parse(release.EndpointOrigin)
+		if err != nil {
+			t.Fatalf("parse Release endpoint origin: %v", err)
+		}
+		port, err := strconv.Atoi(origin.Port())
+		if err != nil || port < 1 || port > 65535 {
+			t.Fatalf("Release endpoint origin has invalid port: %s", release.EndpointOrigin)
+		}
+		address := origin.Hostname()
+		instanceID := agentID + "-primary"
+		if agentID == "runtime-b" {
+			address = "runtime-b-directory"
+			instanceID = "runtime-b-directory"
+		}
+		document.Targets = append(document.Targets, contracts.RouterInstanceDirectoryTargetV1{
+			AgentID: agentID, AgentCardVersion: release.AgentCardVersion, ReleaseID: release.ReleaseID,
+			CardDigest: release.CardDigest, CanonicalEndpoint: release.EndpointOrigin + release.EndpointPath,
+			Audience: release.EndpointOrigin,
+			Instances: []contracts.RouterInstanceV1{{
+				InstanceID: instanceID, Ready: true, Serving: true,
+				Endpoints: []contracts.RouterNetworkEndpointV1{{AddressType: "DNS", Address: address, PortName: "a2a", Port: port, Protocol: "TCP"}},
+			}},
+		})
+	}
+	payload, err := json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const leaf = "cfg-v1-cm91dGVyL2luc3RhbmNlLWRpcmVjdG9yeQ.value"
+	temporary := filepath.Join(env.configCenterRoot, leaf+".tmp")
+	destination := filepath.Join(env.configCenterRoot, leaf)
+	if err := os.WriteFile(temporary, payload, 0o644); err != nil {
+		t.Fatalf("write Router instance directory: %v", err)
+	}
+	if err := os.Chmod(temporary, 0o644); err != nil {
+		t.Fatalf("make Router instance directory readable by the Router container: %v", err)
+	}
+	if err := os.Rename(temporary, destination); err != nil {
+		t.Fatalf("publish Router instance directory: %v", err)
 	}
 }
 
@@ -643,7 +706,7 @@ func assertTrustedPublicationError(t *testing.T, result httpResult, wantStatus i
 	t.Helper()
 	assertNoForbiddenBody(t, result.body, forbidden, "trusted publication error")
 	if result.status != wantStatus {
-		t.Fatalf("trusted publication status=%d want=%d", result.status, wantStatus)
+		t.Fatalf("trusted publication status=%d want=%d body=%s", result.status, wantStatus, result.body)
 	}
 	var failure contracts.TrustedPublicationError
 	if err := json.Unmarshal(result.body, &failure); err != nil || failure.Code != wantCode || failure.TraceID == "" {
