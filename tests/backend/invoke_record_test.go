@@ -42,6 +42,7 @@ type acceptanceEnv struct {
 	controlPlane        string
 	publicAgentOrigin   string
 	routerURL           string
+	nacosURL            string
 	routerToken         string
 	ownerToken          string
 	userToken           string
@@ -49,7 +50,6 @@ type acceptanceEnv struct {
 	databaseURL         string
 	composeFile         string
 	composeProject      string
-	configCenterRoot    string
 	challengeTTL        time.Duration
 	credentialIssuer    string
 	credentialKeyID     string
@@ -137,7 +137,8 @@ func TestInvokeToRecordAcceptance(t *testing.T) {
 	registerAndPublish(t, client, &env, runtimeTimeout)
 	registerAndPublish(t, client, &env, runtimeInterrupted)
 	runtimeLifecycleRelease := registerAndPublish(t, client, &env, runtimeLifecycle)
-	publishRouterInstanceDirectory(t, env)
+	assertNacosRegistrations(t, client, env)
+	publishRouterNacosBindings(t, client, env)
 	assertPublicAgentInputMatrix(t, client, env, contracts.CatalogEntry{PublicAgentID: env.publicAgentIDs["runtime-a"], PublicURL: env.publicAgentOrigin + "/a/" + env.publicAgentIDs["runtime-a"]})
 	assertVerificationFailureMatrix(t, client, &env)
 
@@ -251,10 +252,6 @@ func loadAcceptanceEnv(t *testing.T) acceptanceEnv {
 	if !filepath.IsAbs(composeFile) {
 		t.Fatalf("NEKIRO_E2E_COMPOSE_FILE must be an absolute path")
 	}
-	configCenterRoot := requiredEnv(t, "NEKIRO_E2E_CONFIG_CENTER_ROOT")
-	if !filepath.IsAbs(configCenterRoot) {
-		t.Fatalf("NEKIRO_E2E_CONFIG_CENTER_ROOT must be an absolute path")
-	}
 	ttlSeconds, err := strconv.ParseInt(requiredEnv(t, "NEKIRO_ENDPOINT_CHALLENGE_TTL_SECONDS"), 10, 64)
 	if err != nil || ttlSeconds < 2 || ttlSeconds > 15 {
 		t.Fatalf("NEKIRO_ENDPOINT_CHALLENGE_TTL_SECONDS must be an acceptance value from 2 through 15 seconds")
@@ -263,6 +260,7 @@ func loadAcceptanceEnv(t *testing.T) acceptanceEnv {
 		controlPlane:      requiredEnv(t, "NEKIRO_E2E_CONTROL_PLANE_URL"),
 		publicAgentOrigin: requiredEnv(t, "NEKIRO_E2E_PUBLIC_AGENT_ORIGIN"),
 		routerURL:         requiredEnv(t, "NEKIRO_E2E_ROUTER_URL"),
+		nacosURL:          requiredEnv(t, "NEKIRO_E2E_NACOS_URL"),
 		routerToken:       requiredEnv(t, "NEKIRO_E2E_ROUTER_TOKEN"),
 		ownerToken:        requiredEnv(t, "NEKIRO_E2E_OWNER_TOKEN"),
 		userToken:         requiredEnv(t, "NEKIRO_E2E_USER_TOKEN"),
@@ -270,7 +268,6 @@ func loadAcceptanceEnv(t *testing.T) acceptanceEnv {
 		databaseURL:       requiredEnv(t, "NEKIRO_E2E_DATABASE_URL"),
 		composeFile:       composeFile,
 		composeProject:    requiredEnv(t, "NEKIRO_E2E_COMPOSE_PROJECT"),
-		configCenterRoot:  configCenterRoot,
 		challengeTTL:      time.Duration(ttlSeconds) * time.Second,
 		credentialIssuer:  requiredEnv(t, "NEKIRO_ROUTER_AGENT_CREDENTIAL_ISSUER"),
 		credentialKeyID:   requiredEnv(t, "NEKIRO_ROUTER_AGENT_CREDENTIAL_KEY_ID"),
@@ -280,55 +277,73 @@ func loadAcceptanceEnv(t *testing.T) acceptanceEnv {
 	}
 }
 
-func publishRouterInstanceDirectory(t *testing.T, env acceptanceEnv) {
+func assertNacosRegistrations(t *testing.T, client *http.Client, env acceptanceEnv) {
+	t.Helper()
+	for service, instanceID := range map[string]string{"runtime-a": "runtime-a-primary", "runtime-b": "runtime-b-directory"} {
+		endpoint, err := url.Parse(env.nacosURL + "/v1/ns/instance/list")
+		if err != nil {
+			t.Fatal(err)
+		}
+		query := endpoint.Query()
+		query.Set("serviceName", service)
+		query.Set("groupName", "NEKIRO")
+		query.Set("clusters", "DEFAULT")
+		query.Set("namespaceId", "nekiro")
+		query.Set("healthyOnly", "false")
+		endpoint.RawQuery = query.Encode()
+		result := doRequest(t, client, endpoint.String(), http.MethodGet, "", "", nil)
+		if result.status != http.StatusOK || !bytes.Contains(result.body, []byte(`"nekiro.instanceId":"`+instanceID+`"`)) || !bytes.Contains(result.body, []byte(`"healthy":true`)) {
+			t.Fatalf("Nacos registration %s status=%d body=%s", service, result.status, result.body)
+		}
+	}
+}
+
+func publishRouterNacosBindings(t *testing.T, client *http.Client, env acceptanceEnv) {
 	t.Helper()
 	agentIDs := make([]string, 0, len(env.releases))
 	for agentID := range env.releases {
 		agentIDs = append(agentIDs, agentID)
 	}
 	sort.Strings(agentIDs)
-	document := contracts.RouterInstanceDirectoryV1{SchemaVersion: contracts.RouterInstanceDirectorySchemaVersion, Revision: "stack-runtime-1", Targets: make([]contracts.RouterInstanceDirectoryTargetV1, 0, len(agentIDs))}
+	document := contracts.RouterNacosInstanceBindingsV1{
+		SchemaVersion: contracts.RouterNacosInstanceBindingsSchemaVersion,
+		Revision:      "stack-runtime-1",
+		Targets:       make([]contracts.RouterNacosInstanceBindingTargetV1, 0, len(agentIDs)),
+	}
 	for _, agentID := range agentIDs {
 		release := env.releases[agentID]
 		origin, err := url.Parse(release.EndpointOrigin)
 		if err != nil {
 			t.Fatalf("parse Release endpoint origin: %v", err)
 		}
-		port, err := strconv.Atoi(origin.Port())
-		if err != nil || port < 1 || port > 65535 {
-			t.Fatalf("Release endpoint origin has invalid port: %s", release.EndpointOrigin)
+		serviceName := origin.Hostname()
+		if serviceName != "runtime-a" && serviceName != "runtime-b" {
+			t.Fatalf("Release endpoint origin has no owned Nacos service: %s", release.EndpointOrigin)
 		}
-		address := origin.Hostname()
-		instanceID := agentID + "-primary"
-		if agentID == "runtime-b" {
-			address = "runtime-b-directory"
-			instanceID = "runtime-b-directory"
-		}
-		document.Targets = append(document.Targets, contracts.RouterInstanceDirectoryTargetV1{
+		document.Targets = append(document.Targets, contracts.RouterNacosInstanceBindingTargetV1{
 			AgentID: agentID, AgentCardVersion: release.AgentCardVersion, ReleaseID: release.ReleaseID,
 			CardDigest: release.CardDigest, CanonicalEndpoint: release.EndpointOrigin + release.EndpointPath,
-			Audience: release.EndpointOrigin,
-			Instances: []contracts.RouterInstanceV1{{
-				InstanceID: instanceID, Ready: true, Serving: true,
-				Endpoints: []contracts.RouterNetworkEndpointV1{{AddressType: "DNS", Address: address, PortName: "a2a", Port: port, Protocol: "TCP"}},
-			}},
+			Audience: release.EndpointOrigin, ServiceName: serviceName, GroupName: "NEKIRO", ClusterName: "DEFAULT",
 		})
 	}
 	payload, err := json.Marshal(document)
 	if err != nil {
 		t.Fatal(err)
 	}
-	const leaf = "cfg-v1-cm91dGVyL2luc3RhbmNlLWRpcmVjdG9yeQ.value"
-	temporary := filepath.Join(env.configCenterRoot, leaf+".tmp")
-	destination := filepath.Join(env.configCenterRoot, leaf)
-	if err := os.WriteFile(temporary, payload, 0o644); err != nil {
-		t.Fatalf("write Router instance directory: %v", err)
+	form := url.Values{"dataId": {"router.nacos-bindings"}, "group": {"NEKIRO"}, "tenant": {"nekiro"}, "type": {"json"}, "content": {string(payload)}}
+	request, err := http.NewRequestWithContext(t.Context(), http.MethodPost, env.nacosURL+"/v1/cs/configs", strings.NewReader(form.Encode()))
+	if err != nil {
+		t.Fatal(err)
 	}
-	if err := os.Chmod(temporary, 0o644); err != nil {
-		t.Fatalf("make Router instance directory readable by the Router container: %v", err)
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	response, err := client.Do(request)
+	if err != nil {
+		t.Fatalf("publish Router Nacos bindings: %v", err)
 	}
-	if err := os.Rename(temporary, destination); err != nil {
-		t.Fatalf("publish Router instance directory: %v", err)
+	body, readErr := io.ReadAll(io.LimitReader(response.Body, 4097))
+	closeErr := response.Body.Close()
+	if readErr != nil || closeErr != nil || response.StatusCode != http.StatusOK || len(body) > 4096 || strings.TrimSpace(string(body)) != "true" {
+		t.Fatalf("publish Router Nacos bindings status=%d body=%s read=%v close=%v", response.StatusCode, body, readErr, closeErr)
 	}
 }
 

@@ -21,6 +21,7 @@ write_common() {
   printf '%s\n' '{"schemaVersion":"1","revision":"stack-bootstrap-1","targets":[]}' >"$config_root/cfg-v1-cm91dGVyL2luc3RhbmNlLWRpcmVjdG9yeQ.value"
   cat >>"$output" <<'EOF'
 POSTGRES_PORT=55432
+NACOS_PORT=18848
 CONTROL_PLANE_PORT=18080
 A2A_ROUTER_PORT=18081
 NEKIRO_PUBLIC_AGENT_ORIGIN=https://agents.nekiro.test
@@ -50,6 +51,8 @@ RUNTIME_B_EVENT_LIMIT_BYTES=65536
 NEKIRO_ROUTER_CONFIG_CENTER_MAX_PAYLOAD_BYTES=1048576
 NEKIRO_ROUTER_INSTANCE_DIRECTORY_KEY=router/instance-directory
 NEKIRO_ROUTER_INSTANCE_PORT_NAME=a2a
+NEKIRO_ROUTER_NACOS_RESPONSE_LIMIT_BYTES=1048576
+NEKIRO_ROUTER_NACOS_REQUEST_TIMEOUT_MS=3000
 EOF
   printf 'NEKIRO_ROUTER_CONFIG_CENTER_ROOT=%s\n' "$config_root" >>"$output"
   printf 'NEKIRO_E2E_COMPOSE_FILE=%s/compose.yaml\n' "$stack_root" >>"$output"
@@ -85,9 +88,11 @@ NEKIRO_E2E_OWNER_TOKEN=acceptance-owner-token
 NEKIRO_E2E_USER_TOKEN=acceptance-user-token
 NEKIRO_E2E_OTHER_TOKEN=acceptance-other-token
 NEKIRO_E2E_DATABASE_URL=postgresql://nekiro_acceptance:acceptance-only-password@127.0.0.1:55432/nekiro_acceptance?sslmode=disable
-NEKIRO_ROUTER_INSTANCE_ROUTING_MODE=config_center_file
+NEKIRO_ROUTER_INSTANCE_ROUTING_MODE=nacos
+NEKIRO_ROUTER_INSTANCE_DIRECTORY_KEY=router.nacos-bindings
 EOF
     printf 'NEKIRO_E2E_CONFIG_CENTER_ROOT=%s\n' "$config_root" >>"$output"
+    printf 'NEKIRO_E2E_NACOS_URL=http://127.0.0.1:%s/nacos\n' "${NACOS_PORT:-18848}" >>"$output"
     ;;
   browser)
     write_common

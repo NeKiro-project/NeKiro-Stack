@@ -1,6 +1,45 @@
 name: nekiro
 
 services:
+  nacos:
+    image: "nacos/nacos-server:v2.5.1@sha256:8987908cb94ed5f9d30522a64493d35732a6c05f216d667a7addb022f3d92e80"
+    environment:
+      MODE: standalone
+      NACOS_AUTH_ENABLE: "false"
+    networks:
+      - platform-internal
+      - local-access
+    ports:
+      - "127.0.0.1:${NACOS_PORT:?NACOS_PORT must be set and non-empty}:8848"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8848/nacos/v1/console/health/readiness"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 20s
+
+  nacos-bootstrap:
+    image: "curlimages/curl:8.16.0@sha256:463eaf6072688fe96ac64fa623fe73e1dbe25d8ad6c34404a669ad3ce1f104b6"
+    environment:
+      NACOS_BINDING_CONTENT: '{"schemaVersion":"1","revision":"stack-bootstrap-1","targets":[]}'
+    command:
+      - sh
+      - -eu
+      - -c
+      - |
+        curl -fsS -X POST http://nacos:8848/nacos/v1/console/namespaces \
+          --data-urlencode customNamespaceId=nekiro \
+          --data-urlencode namespaceName=nekiro \
+          --data-urlencode 'namespaceDesc=NeKiro Stack acceptance'
+        curl -fsS -X POST 'http://nacos:8848/nacos/v1/cs/configs?dataId=router.nacos-bindings&group=NEKIRO&tenant=nekiro' \
+          --data-urlencode content=$$NACOS_BINDING_CONTENT
+    depends_on:
+      nacos:
+        condition: service_healthy
+    networks:
+      - platform-internal
+    restart: "no"
+
   postgres:
     image: postgres:17.9-bookworm@sha256:47f917f7409eacd22fc5dfb1dee634e1b55cf0c01d1a7eb701be2227a03e0641
     environment:
@@ -107,6 +146,12 @@ services:
       NEKIRO_ROUTER_AGENT_CREDENTIAL_PRIVATE_KEY_BASE64URL: "${NEKIRO_ROUTER_AGENT_CREDENTIAL_PRIVATE_KEY_BASE64URL:?NEKIRO_ROUTER_AGENT_CREDENTIAL_PRIVATE_KEY_BASE64URL must be set and non-empty}"
       NEKIRO_ROUTER_AGENT_CREDENTIAL_TTL_SECONDS: "${NEKIRO_ROUTER_AGENT_CREDENTIAL_TTL_SECONDS:?NEKIRO_ROUTER_AGENT_CREDENTIAL_TTL_SECONDS must be set and non-empty}"
       NEKIRO_ROUTER_INSTANCE_ROUTING_MODE: "${NEKIRO_ROUTER_INSTANCE_ROUTING_MODE:?NEKIRO_ROUTER_INSTANCE_ROUTING_MODE must be set and non-empty}"
+      NEKIRO_ROUTER_NACOS_API_ORIGIN: "http://nacos:8848/nacos"
+      NEKIRO_ROUTER_NACOS_NAMESPACE_ID: "nekiro"
+      NEKIRO_ROUTER_NACOS_CONFIG_GROUP: "NEKIRO"
+      NEKIRO_ROUTER_NACOS_AUTH_MODE: "none"
+      NEKIRO_ROUTER_NACOS_RESPONSE_LIMIT_BYTES: "${NEKIRO_ROUTER_NACOS_RESPONSE_LIMIT_BYTES:?NEKIRO_ROUTER_NACOS_RESPONSE_LIMIT_BYTES must be set and non-empty}"
+      NEKIRO_ROUTER_NACOS_REQUEST_TIMEOUT_MS: "${NEKIRO_ROUTER_NACOS_REQUEST_TIMEOUT_MS:?NEKIRO_ROUTER_NACOS_REQUEST_TIMEOUT_MS must be set and non-empty}"
       NEKIRO_ROUTER_CONFIG_CENTER_FILE_ROOT: "/var/lib/nekiro/config"
       NEKIRO_ROUTER_CONFIG_CENTER_MAX_PAYLOAD_BYTES: "${NEKIRO_ROUTER_CONFIG_CENTER_MAX_PAYLOAD_BYTES:?NEKIRO_ROUTER_CONFIG_CENTER_MAX_PAYLOAD_BYTES must be set and non-empty}"
       NEKIRO_ROUTER_INSTANCE_DIRECTORY_KEY: "${NEKIRO_ROUTER_INSTANCE_DIRECTORY_KEY:?NEKIRO_ROUTER_INSTANCE_DIRECTORY_KEY must be set and non-empty}"
@@ -120,6 +165,8 @@ services:
         condition: service_completed_successfully
       control-plane:
         condition: service_healthy
+      nacos-bootstrap:
+        condition: service_completed_successfully
     networks:
       - platform-internal
       - local-access
@@ -136,6 +183,7 @@ services:
       RUNTIME_B_LISTEN_ADDR: "0.0.0.0:8092"
       RUNTIME_B_AGENT_ID: "runtime-b"
       RUNTIME_B_INSTANCE_ID: "runtime-b-primary"
+      RUNTIME_B_REGISTRATION_MODE: "disabled"
       RUNTIME_B_ROUTER_URL: "http://a2a-router:8081"
       RUNTIME_B_ROUTER_TOKEN: "${RUNTIME_B_ROUTER_TOKEN:?RUNTIME_B_ROUTER_TOKEN must be set and non-empty}"
       RUNTIME_B_TARGET_AGENT_ID: "runtime-a"
@@ -165,6 +213,17 @@ services:
       RUNTIME_B_LISTEN_ADDR: "0.0.0.0:8092"
       RUNTIME_B_AGENT_ID: "runtime-b"
       RUNTIME_B_INSTANCE_ID: "runtime-b-directory"
+      RUNTIME_B_REGISTRATION_MODE: "nacos"
+      RUNTIME_B_NACOS_API_ORIGIN: "http://nacos:8848/nacos"
+      RUNTIME_B_NACOS_NAMESPACE_ID: "nekiro"
+      RUNTIME_B_NACOS_GROUP_NAME: "NEKIRO"
+      RUNTIME_B_NACOS_SERVICE_NAME: "runtime-b"
+      RUNTIME_B_NACOS_CLUSTER_NAME: "DEFAULT"
+      RUNTIME_B_NACOS_ADVERTISED_IP: "172.28.0.12"
+      RUNTIME_B_NACOS_ADVERTISED_PORT: "8092"
+      RUNTIME_B_NACOS_HEARTBEAT_INTERVAL_MS: "2000"
+      RUNTIME_B_NACOS_REQUEST_TIMEOUT_MS: "3000"
+      RUNTIME_B_NACOS_AUTH_MODE: "none"
       RUNTIME_B_ROUTER_URL: "http://a2a-router:8081"
       RUNTIME_B_ROUTER_TOKEN: "${RUNTIME_B_ROUTER_TOKEN:?RUNTIME_B_ROUTER_TOKEN must be set and non-empty}"
       RUNTIME_B_TARGET_AGENT_ID: "runtime-a"
@@ -180,7 +239,8 @@ services:
       a2a-router:
         condition: service_healthy
     networks:
-      - platform-internal
+      platform-internal:
+        ipv4_address: 172.28.0.12
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8092/readyz"]
       interval: 5s
@@ -193,6 +253,18 @@ services:
     environment:
       RUNTIME_A_LISTEN_ADDR: "0.0.0.0:8091"
       RUNTIME_A_AGENT_ID: "runtime-a"
+      RUNTIME_A_INSTANCE_ID: "runtime-a-primary"
+      RUNTIME_A_REGISTRATION_MODE: "nacos"
+      RUNTIME_A_NACOS_API_ORIGIN: "http://nacos:8848/nacos"
+      RUNTIME_A_NACOS_NAMESPACE_ID: "nekiro"
+      RUNTIME_A_NACOS_GROUP_NAME: "NEKIRO"
+      RUNTIME_A_NACOS_SERVICE_NAME: "runtime-a"
+      RUNTIME_A_NACOS_CLUSTER_NAME: "DEFAULT"
+      RUNTIME_A_NACOS_ADVERTISED_IP: "172.28.0.11"
+      RUNTIME_A_NACOS_ADVERTISED_PORT: "8091"
+      RUNTIME_A_NACOS_HEARTBEAT_INTERVAL_MS: "2000"
+      RUNTIME_A_NACOS_REQUEST_TIMEOUT_MS: "3000"
+      RUNTIME_A_NACOS_AUTH_MODE: "none"
       RUNTIME_A_ROUTER_URL: "http://a2a-router:8081"
       RUNTIME_A_ROUTER_TOKEN: "${RUNTIME_A_ROUTER_TOKEN:?RUNTIME_A_ROUTER_TOKEN must be set and non-empty}"
       RUNTIME_A_TARGET_AGENT_ID: "runtime-b"
@@ -210,7 +282,8 @@ services:
       runtime-b:
         condition: service_healthy
     networks:
-      - platform-internal
+      platform-internal:
+        ipv4_address: 172.28.0.11
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8091/readyz"]
       interval: 5s
@@ -224,4 +297,7 @@ volumes:
 networks:
   platform-internal:
     internal: true
+    ipam:
+      config:
+        - subnet: 172.28.0.0/24
   local-access:
