@@ -83,11 +83,11 @@ jobs:
       - name: Capture sanitized backend logs
         if: always() && steps.prepare.outcome == 'success'
         shell: bash
-        run: docker compose --project-name "$NEKIRO_E2E_COMPOSE_PROJECT" --file compose.yaml --profile snapshot-refresh logs --no-color 2>&1 | perl scripts/sanitize-logs.pl
+        run: docker compose --project-name "$NEKIRO_E2E_COMPOSE_PROJECT" --file compose.yaml --profile watch-refresh logs --no-color 2>&1 | perl scripts/sanitize-logs.pl
 
       - name: Tear down backend assembly
         if: always() && steps.prepare.outcome == 'success'
-        run: docker compose --project-name "$NEKIRO_E2E_COMPOSE_PROJECT" --file compose.yaml --profile snapshot-refresh down --volumes --remove-orphans
+        run: docker compose --project-name "$NEKIRO_E2E_COMPOSE_PROJECT" --file compose.yaml --profile watch-refresh down --volumes --remove-orphans
 
   browser:
     runs-on: ubuntu-latest

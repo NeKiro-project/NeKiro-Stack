@@ -152,6 +152,13 @@ services:
       NEKIRO_ROUTER_NACOS_AUTH_MODE: "none"
       NEKIRO_ROUTER_NACOS_RESPONSE_LIMIT_BYTES: "${NEKIRO_ROUTER_NACOS_RESPONSE_LIMIT_BYTES:?NEKIRO_ROUTER_NACOS_RESPONSE_LIMIT_BYTES must be set and non-empty}"
       NEKIRO_ROUTER_NACOS_REQUEST_TIMEOUT_MS: "${NEKIRO_ROUTER_NACOS_REQUEST_TIMEOUT_MS:?NEKIRO_ROUTER_NACOS_REQUEST_TIMEOUT_MS must be set and non-empty}"
+      NEKIRO_ROUTER_NACOS_OBSERVE_ENABLED: "true"
+      NEKIRO_ROUTER_NACOS_GRPC_TARGET: "nacos:9848"
+      NEKIRO_ROUTER_NACOS_GRPC_CLIENT_IP: "172.28.0.10"
+      NEKIRO_ROUTER_NACOS_GRPC_REQUEST_TIMEOUT_MS: "${NEKIRO_ROUTER_NACOS_GRPC_REQUEST_TIMEOUT_MS:?NEKIRO_ROUTER_NACOS_GRPC_REQUEST_TIMEOUT_MS must be set and non-empty}"
+      NEKIRO_ROUTER_NACOS_PENDING_CHANGES: "${NEKIRO_ROUTER_NACOS_PENDING_CHANGES:?NEKIRO_ROUTER_NACOS_PENDING_CHANGES must be set and non-empty}"
+      NEKIRO_ROUTER_NACOS_MAX_OBSERVATIONS: "${NEKIRO_ROUTER_NACOS_MAX_OBSERVATIONS:?NEKIRO_ROUTER_NACOS_MAX_OBSERVATIONS must be set and non-empty}"
+      NEKIRO_ROUTER_NACOS_GRPC_TRANSPORT_SECURITY: "insecure"
       NEKIRO_ROUTER_CONFIG_CENTER_FILE_ROOT: "/var/lib/nekiro/config"
       NEKIRO_ROUTER_CONFIG_CENTER_MAX_PAYLOAD_BYTES: "${NEKIRO_ROUTER_CONFIG_CENTER_MAX_PAYLOAD_BYTES:?NEKIRO_ROUTER_CONFIG_CENTER_MAX_PAYLOAD_BYTES must be set and non-empty}"
       NEKIRO_ROUTER_INSTANCE_DIRECTORY_KEY: "${NEKIRO_ROUTER_INSTANCE_DIRECTORY_KEY:?NEKIRO_ROUTER_INSTANCE_DIRECTORY_KEY must be set and non-empty}"
@@ -168,8 +175,9 @@ services:
       nacos-bootstrap:
         condition: service_completed_successfully
     networks:
-      - platform-internal
-      - local-access
+      platform-internal:
+        ipv4_address: 172.28.0.10
+      local-access:
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8081/readyz"]
       interval: 5s
@@ -248,8 +256,8 @@ services:
       retries: 12
       start_period: 5s
 
-  runtime-b-snapshot-replacement:
-    profiles: ["snapshot-refresh"]
+  runtime-b-watch-replacement:
+    profiles: ["watch-refresh"]
     image: "${NEKIRO_RUNTIME_B_IMAGE:?NEKIRO_RUNTIME_B_IMAGE must be set to the prepared immutable image}"
     environment:
       RUNTIME_B_LISTEN_ADDR: "0.0.0.0:8092"

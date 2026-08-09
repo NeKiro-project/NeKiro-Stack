@@ -317,8 +317,8 @@ func replaceRuntimeBNacosInstance(t *testing.T, client *http.Client, env accepta
 
 	start := composeCommand(
 		t.Context(), env,
-		"--profile", "snapshot-refresh", "up", "--detach", "--no-deps", "--force-recreate",
-		"--wait", "--wait-timeout", "60", "runtime-b-snapshot-replacement",
+		"--profile", "watch-refresh", "up", "--detach", "--no-deps", "--force-recreate",
+		"--wait", "--wait-timeout", "60", "runtime-b-watch-replacement",
 	)
 	if output, err := start.CombinedOutput(); err != nil {
 		t.Fatalf("start replacement Runtime B directory instance: %v output=%s", err, output)
@@ -1911,7 +1911,7 @@ func assertStorageAndLogsAreMetadataOnly(t *testing.T, env acceptanceEnv) {
 		t.Fatal(err)
 	}
 	installationRows.Close()
-	logs := composeCommand(ctx, env, "--profile", "snapshot-refresh", "logs", "--no-color")
+	logs := composeCommand(ctx, env, "--profile", "watch-refresh", "logs", "--no-color")
 	output, err := logs.Output()
 	if err != nil {
 		t.Fatal(err)
