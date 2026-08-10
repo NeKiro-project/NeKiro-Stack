@@ -116,10 +116,13 @@ jobs:
         run: |
           ./scripts/prepare.sh "$GITHUB_WORKSPACE/components.json" "$WORK_ROOT" "$PREPARED_ENV"
           source "$PREPARED_ENV"
-          for name in NEKIRO_CONTROL_PLANE_IMAGE NEKIRO_A2A_ROUTER_IMAGE NEKIRO_RUNTIME_A_IMAGE NEKIRO_RUNTIME_B_IMAGE NEKIRO_STACK_CORE_DIR NEKIRO_STACK_CONSOLE_DIR NEKIRO_STACK_SDK_GO_DIR NEKIRO_STACK_SAMPLES_DIR NEKIRO_STACK_TRANSPORT_GO_DIR; do
+          for name in NEKIRO_CONTROL_PLANE_IMAGE NEKIRO_A2A_ROUTER_IMAGE NEKIRO_RUNTIME_A_IMAGE NEKIRO_RUNTIME_B_IMAGE NEKIRO_NACOS_SECURE_PROXY_IMAGE NEKIRO_STACK_CORE_DIR NEKIRO_STACK_CONSOLE_DIR NEKIRO_STACK_SDK_GO_DIR NEKIRO_STACK_SAMPLES_DIR NEKIRO_STACK_TRANSPORT_GO_DIR; do
             printf '%s=%s\n' "$name" "${!name}" >>"$GITHUB_ENV"
           done
           printf 'NEKIRO_STACK_PREPARED_ENV=%s\n' "$PREPARED_ENV" >>"$GITHUB_ENV"
+
+      - name: Generate ephemeral Nacos PKI
+        run: go run ./cmd/nacos-secure-fixture generate "$NEKIRO_E2E_TLS_ROOT"
 
       - name: Start fresh exact backend assembly
         run: docker compose --project-name "$NEKIRO_E2E_COMPOSE_PROJECT" --file compose.yaml up --detach --wait --wait-timeout 120
@@ -173,10 +176,13 @@ jobs:
         run: |
           ./scripts/prepare.sh "$GITHUB_WORKSPACE/components.json" "$WORK_ROOT" "$PREPARED_ENV"
           source "$PREPARED_ENV"
-          for name in NEKIRO_CONTROL_PLANE_IMAGE NEKIRO_A2A_ROUTER_IMAGE NEKIRO_RUNTIME_A_IMAGE NEKIRO_RUNTIME_B_IMAGE NEKIRO_STACK_CORE_DIR NEKIRO_STACK_CONSOLE_DIR NEKIRO_STACK_SDK_GO_DIR NEKIRO_STACK_SAMPLES_DIR NEKIRO_STACK_TRANSPORT_GO_DIR; do
+          for name in NEKIRO_CONTROL_PLANE_IMAGE NEKIRO_A2A_ROUTER_IMAGE NEKIRO_RUNTIME_A_IMAGE NEKIRO_RUNTIME_B_IMAGE NEKIRO_NACOS_SECURE_PROXY_IMAGE NEKIRO_STACK_CORE_DIR NEKIRO_STACK_CONSOLE_DIR NEKIRO_STACK_SDK_GO_DIR NEKIRO_STACK_SAMPLES_DIR NEKIRO_STACK_TRANSPORT_GO_DIR; do
             printf '%s=%s\n' "$name" "${!name}" >>"$GITHUB_ENV"
           done
           printf 'NEKIRO_STACK_PREPARED_ENV=%s\n' "$PREPARED_ENV" >>"$GITHUB_ENV"
+
+      - name: Generate ephemeral Nacos PKI
+        run: go run ./cmd/nacos-secure-fixture generate "$NEKIRO_E2E_TLS_ROOT"
 
       - name: Start fresh exact browser assembly
         run: docker compose --project-name "$NEKIRO_E2E_COMPOSE_PROJECT" --file compose.yaml up --detach --wait --wait-timeout 120

@@ -73,17 +73,20 @@ control_plane_image="nekiro-control-plane:${component_shas[core]}"
 router_image="nekiro-a2a-router:${component_shas[core]}"
 runtime_a_image="nekiro-runtime-a:${component_shas[samples]}"
 runtime_b_image="nekiro-runtime-b:${component_shas[samples]}"
+secure_fixture_image="nekiro-nacos-secure-fixture:$(git rev-parse HEAD)"
 
 docker build --file "${component_dirs[core]}/apps/control-plane/Dockerfile" --tag "$control_plane_image" "${component_dirs[core]}"
 docker build --file "${component_dirs[core]}/apps/a2a-router/Dockerfile" --tag "$router_image" "${component_dirs[core]}"
 docker build --file "${component_dirs[samples]}/runtime-a/Dockerfile" --tag "$runtime_a_image" "${component_dirs[samples]}"
 docker build --file "${component_dirs[samples]}/runtime-b/Dockerfile" --tag "$runtime_b_image" "${component_dirs[samples]}"
+docker build --file tests/fixtures/nacos-secure-fixture.Dockerfile --tag "$secure_fixture_image" .
 
 {
   printf 'NEKIRO_CONTROL_PLANE_IMAGE=%q\n' "$control_plane_image"
   printf 'NEKIRO_A2A_ROUTER_IMAGE=%q\n' "$router_image"
   printf 'NEKIRO_RUNTIME_A_IMAGE=%q\n' "$runtime_a_image"
   printf 'NEKIRO_RUNTIME_B_IMAGE=%q\n' "$runtime_b_image"
+  printf 'NEKIRO_NACOS_SECURE_PROXY_IMAGE=%q\n' "$secure_fixture_image"
   printf 'NEKIRO_STACK_CORE_DIR=%q\n' "${component_dirs[core]}"
   printf 'NEKIRO_STACK_CONSOLE_DIR=%q\n' "${component_dirs[console]}"
   printf 'NEKIRO_STACK_SDK_GO_DIR=%q\n' "${component_dirs[sdkGo]}"
