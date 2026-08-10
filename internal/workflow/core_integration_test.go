@@ -70,6 +70,14 @@ func TestCoreIntegrationPinsStackSourceAndExportsPreparedImages(t *testing.T) {
 			t.Errorf("%s prepare step does not export %s", jobName, secureProxyImage)
 		}
 	}
+	backend := workflow.Jobs["backend"]
+	namedStep(t, backend.Steps, "Generate ephemeral Nacos PKI")
+	start := namedStep(t, backend.Steps, "Start exact backend assembly")
+	for _, required := range []string{"NEKIRO_E2E_COMPOSE_OVERRIDE_FILE", "--profile router-nacos-secure"} {
+		if !strings.Contains(start.Run, required) {
+			t.Errorf("backend start step does not contain %q", required)
+		}
+	}
 }
 
 func namedStep(t *testing.T, steps []workflowStep, name string) workflowStep {
