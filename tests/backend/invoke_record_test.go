@@ -31,8 +31,9 @@ import (
 )
 
 const (
-	acceptanceWorkspace  = "workspace-acceptance"
-	acceptanceProviderID = "provider-acceptance"
+	acceptanceWorkspace     = "workspace-acceptance"
+	acceptanceProviderID    = "provider-acceptance"
+	cancelObservationPrefix = "cancel-observation-"
 )
 
 var routerCredentialPattern = regexp.MustCompile(`(^|[^A-Za-z0-9_-])([A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)($|[^A-Za-z0-9_-])`)
@@ -118,7 +119,7 @@ func TestInvokeToRecordAcceptance(t *testing.T) {
 		"policy-content-secret", "protocol-content-secret", "agent-content-secret",
 		"route-content-secret", "timeout-content-secret", "cancel-content-secret",
 		"interrupted-content-secret", "dependency-content-secret", "dependency-raw-secret",
-		"snapshot-refresh-value", "removed-runtime-value",
+		"snapshot-refresh-value", "removed-runtime-value", cancelObservationPrefix,
 	}, env.credentialForbidden...)
 	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }, Timeout: 45 * time.Second}
 	if result := doRequest(t, client, env.controlPlane+"/readyz", http.MethodGet, "", "", nil); result.status != http.StatusNoContent {
@@ -1532,12 +1533,14 @@ func assertFailureMatrix(t *testing.T, client *http.Client, env acceptanceEnv) {
 	assertRecord(t, client, env, timeoutInvocationID, acceptanceWorkspace, "runtime-timeout", "timed_out", string(contracts.ErrorCodeTimeout))
 	canceledInvocationIDs := make(map[string]struct{}, 5)
 	for attempt := 0; attempt < 5; attempt++ {
-		canceledInvocationID := invokeCanceledSSE(t, client, env, "runtime-interrupted", "runtime.interrupted")
+		marker := fmt.Sprintf("%s%d", cancelObservationPrefix, attempt)
+		canceledInvocationID := invokeCanceledSSE(t, client, env, "runtime-interrupted", "runtime.interrupted", marker)
 		if _, exists := canceledInvocationIDs[canceledInvocationID]; exists {
 			t.Fatalf("caller cancellation attempt %d reused Invocation %s", attempt+1, canceledInvocationID)
 		}
 		canceledInvocationIDs[canceledInvocationID] = struct{}{}
 		waitForRecord(t, client, env, canceledInvocationID, "canceled", string(contracts.ErrorCodeCanceled))
+		assertProviderCancellation(t, client, env, marker)
 	}
 	interrupted := invokeSSE(t, client, env, "runtime-interrupted", "runtime.interrupted", map[string]any{"fixture": "interrupted", "value": "interrupted-content-secret"})
 	interruptedInvocationID := assertStreamTerminal(t, interrupted, contracts.ResultStreamEventFailed, contracts.ErrorCodeA2AProtocol, env.forbidden)
@@ -1605,11 +1608,11 @@ func assertDependencyFailure(t *testing.T, client *http.Client, env acceptanceEn
 	assertErrorCode(t, result, contracts.ErrorCodeDependency, env.forbidden)
 }
 
-func invokeCanceledSSE(t *testing.T, client *http.Client, env acceptanceEnv, agentID, capability string) string {
+func invokeCanceledSSE(t *testing.T, client *http.Client, env acceptanceEnv, agentID, capability, marker string) string {
 	t.Helper()
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	body, err := json.Marshal(map[string]any{"agentId": agentID, "capability": capability, "input": map[string]any{"fixture": "hold", "value": "cancel-content-secret"}, "stream": true})
+	body, err := json.Marshal(map[string]any{"agentId": agentID, "capability": capability, "input": map[string]any{"fixture": "hold", "value": marker}, "stream": true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1624,27 +1627,74 @@ func invokeCanceledSSE(t *testing.T, client *http.Client, env acceptanceEnv, age
 	if err != nil {
 		t.Fatal(err)
 	}
+	if response.StatusCode != http.StatusOK {
+		data, _ := io.ReadAll(response.Body)
+		response.Body.Close()
+		t.Fatalf("cancel SSE status=%d body=%s", response.StatusCode, data)
+	}
 	reader := bufio.NewReader(response.Body)
-	line, err := reader.ReadString('\n')
-	if err != nil || !strings.HasPrefix(line, "data: ") {
+	accepted := readCancellationSSEEvent(t, reader, env.forbidden)
+	if accepted.Type != contracts.ResultStreamEventAccepted || accepted.Sequence != 0 {
 		response.Body.Close()
-		t.Fatalf("cancel stream accepted read err=%v line=%q", err, line)
+		t.Fatalf("cancel stream accepted=%#v", accepted)
 	}
-	blank, err := reader.ReadString('\n')
-	if err != nil || blank != "\n" {
+	providerEvent := readCancellationSSEEvent(t, reader, env.credentialForbidden)
+	if providerEvent.Type != contracts.ResultStreamEventChunk || providerEvent.Sequence != 1 || len(providerEvent.Chunk) == 0 ||
+		providerEvent.InvocationID != accepted.InvocationID || providerEvent.RootTaskID != accepted.RootTaskID || providerEvent.TraceID != accepted.TraceID {
 		response.Body.Close()
-		t.Fatalf("cancel stream delimiter=%q err=%v", blank, err)
-	}
-	var accepted contracts.InvocationResultStreamEventV2
-	eventBody := []byte(strings.TrimSuffix(strings.TrimPrefix(line, "data: "), "\n"))
-	assertNoForbiddenBody(t, eventBody, env.forbidden, "SSE cancellation response")
-	if err := json.Unmarshal(eventBody, &accepted); err != nil || accepted.Type != contracts.ResultStreamEventAccepted {
-		response.Body.Close()
-		t.Fatalf("cancel stream accepted=%#v err=%v", accepted, err)
+		t.Fatalf("cancel stream Provider event=%#v accepted=%#v", providerEvent, accepted)
 	}
 	cancel()
 	_ = response.Body.Close()
 	return accepted.InvocationID
+}
+
+func readCancellationSSEEvent(t *testing.T, reader *bufio.Reader, forbidden []string) contracts.InvocationResultStreamEventV2 {
+	t.Helper()
+	line, err := reader.ReadString('\n')
+	if err != nil || !strings.HasPrefix(line, "data: ") {
+		t.Fatalf("cancel stream read err=%v line=%q", err, line)
+	}
+	blank, err := reader.ReadString('\n')
+	if err != nil || blank != "\n" {
+		t.Fatalf("cancel stream delimiter=%q err=%v", blank, err)
+	}
+	eventBody := []byte(strings.TrimSuffix(strings.TrimPrefix(line, "data: "), "\n"))
+	assertNoForbiddenBody(t, eventBody, forbidden, "SSE cancellation response")
+	var event contracts.InvocationResultStreamEventV2
+	if err := json.Unmarshal(eventBody, &event); err != nil {
+		t.Fatalf("decode cancel stream event: %v body=%s", err, eventBody)
+	}
+	return event
+}
+
+func assertProviderCancellation(t *testing.T, client *http.Client, env acceptanceEnv, marker string) {
+	t.Helper()
+	observation := invokeJSON(t, client, env, "runtime-interrupted", "runtime.interrupted", map[string]any{"fixture": "cancel-observed", "value": marker})
+	if observation.result.Status != "succeeded" {
+		t.Fatalf("Provider cancellation observation status=%q result=%s", observation.result.Status, observation.result.Result)
+	}
+	var message struct {
+		Parts []struct {
+			Kind string `json:"kind"`
+			Data struct {
+				Agent       string `json:"agent"`
+				InstanceID  string `json:"instanceId"`
+				Fixture     string `json:"fixture"`
+				Canceled    bool   `json:"canceled"`
+				CancelCount int    `json:"cancelCount"`
+			} `json:"data"`
+		} `json:"parts"`
+	}
+	if err := json.Unmarshal(observation.result.Result, &message); err != nil || len(message.Parts) != 1 || message.Parts[0].Kind != "data" {
+		t.Fatalf("decode Provider cancellation observation: err=%v result=%s", err, observation.result.Result)
+	}
+	data := message.Parts[0].Data
+	if data.Agent != "runtime-b" || data.InstanceID == "" || data.Fixture != "cancel-observed" || !data.Canceled || data.CancelCount != 1 {
+		t.Fatalf("Provider cancellation observation=%#v", data)
+	}
+	assertNoForbiddenBody(t, observation.result.Result, []string{marker}, "Provider cancellation observation")
+	assertRecord(t, client, env, observation.result.InvocationID, acceptanceWorkspace, "runtime-interrupted", "succeeded", "")
 }
 
 func waitForRecord(t *testing.T, client *http.Client, env acceptanceEnv, invocationID, status, errorCode string) contracts.InvocationDetailResponseV4 {
