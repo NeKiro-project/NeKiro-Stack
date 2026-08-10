@@ -51,6 +51,7 @@ type acceptanceEnv struct {
 	otherToken          string
 	databaseURL         string
 	composeFile         string
+	composeOverride     string
 	composeProject      string
 	challengeTTL        time.Duration
 	credentialIssuer    string
@@ -268,8 +269,9 @@ func TestInvokeToRecordAcceptance(t *testing.T) {
 func loadAcceptanceEnv(t *testing.T) acceptanceEnv {
 	t.Helper()
 	composeFile := requiredEnv(t, "NEKIRO_E2E_COMPOSE_FILE")
-	if !filepath.IsAbs(composeFile) {
-		t.Fatalf("NEKIRO_E2E_COMPOSE_FILE must be an absolute path")
+	composeOverride := requiredEnv(t, "NEKIRO_E2E_COMPOSE_OVERRIDE_FILE")
+	if !filepath.IsAbs(composeFile) || !filepath.IsAbs(composeOverride) {
+		t.Fatalf("E2E Compose files must use absolute paths")
 	}
 	ttlSeconds, err := strconv.ParseInt(requiredEnv(t, "NEKIRO_ENDPOINT_CHALLENGE_TTL_SECONDS"), 10, 64)
 	if err != nil || ttlSeconds < 2 || ttlSeconds > 15 {
@@ -290,6 +292,7 @@ func loadAcceptanceEnv(t *testing.T) acceptanceEnv {
 		tlsPort:            requiredEnv(t, "NEKIRO_E2E_NACOS_TLS_PORT"),
 		mtlsPort:           requiredEnv(t, "NEKIRO_E2E_NACOS_MTLS_PORT"),
 		composeFile:        composeFile,
+		composeOverride:    composeOverride,
 		composeProject:     requiredEnv(t, "NEKIRO_E2E_COMPOSE_PROJECT"),
 		challengeTTL:       time.Duration(ttlSeconds) * time.Second,
 		credentialIssuer:   requiredEnv(t, "NEKIRO_ROUTER_AGENT_CREDENTIAL_ISSUER"),
@@ -545,7 +548,7 @@ func requiredEnv(t *testing.T, name string) string {
 }
 
 func composeCommand(ctx context.Context, env acceptanceEnv, args ...string) *exec.Cmd {
-	base := []string{"compose", "--project-name", env.composeProject, "--file", env.composeFile}
+	base := []string{"compose", "--project-name", env.composeProject, "--file", env.composeFile, "--file", env.composeOverride, "--profile", "router-nacos-secure"}
 	command := exec.CommandContext(ctx, "docker", append(base, args...)...)
 	command.Env = append(os.Environ(), runtimeRegistrationEnvironment(env)...)
 	return command

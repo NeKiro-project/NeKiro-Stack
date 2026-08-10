@@ -1,0 +1,19 @@
+services:
+  a2a-router:
+    environment:
+      NEKIRO_ROUTER_NACOS_API_ORIGIN: "https://nacos-secure:9443/nacos"
+      NEKIRO_ROUTER_NACOS_HTTP_TLS_CA_FILE: "/var/run/nekiro-nacos-tls/ca.pem"
+      NEKIRO_ROUTER_NACOS_HTTP_TLS_SERVER_NAME: "nacos.internal"
+      NEKIRO_ROUTER_NACOS_HTTP_TLS_CLIENT_CERT_FILE: "/var/run/nekiro-nacos-tls/client.pem"
+      NEKIRO_ROUTER_NACOS_HTTP_TLS_CLIENT_KEY_FILE: "/var/run/nekiro-nacos-tls/client-key.pem"
+      NEKIRO_ROUTER_NACOS_GRPC_TARGET: "nacos-secure:9848"
+      NEKIRO_ROUTER_NACOS_GRPC_TRANSPORT_SECURITY: "mtls"
+      NEKIRO_ROUTER_NACOS_GRPC_TLS_CA_FILE: "/var/run/nekiro-nacos-tls/ca.pem"
+      NEKIRO_ROUTER_NACOS_GRPC_TLS_SERVER_NAME: "nacos.internal"
+      NEKIRO_ROUTER_NACOS_GRPC_TLS_CLIENT_CERT_FILE: "/var/run/nekiro-nacos-tls/client.pem"
+      NEKIRO_ROUTER_NACOS_GRPC_TLS_CLIENT_KEY_FILE: "/var/run/nekiro-nacos-tls/client-key.pem"
+    volumes:
+      - "${NEKIRO_E2E_TLS_ROOT:?NEKIRO_E2E_TLS_ROOT must be set and non-empty}:/var/run/nekiro-nacos-tls:ro"
+    depends_on:
+      nacos-secure:
+        condition: service_healthy

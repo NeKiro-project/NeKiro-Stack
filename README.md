@@ -56,7 +56,12 @@ prepared image environment, then validate and start the stack:
 
 ```bash
 docker compose --file compose.yaml config --quiet
-docker compose --project-name nekiro-stack --file compose.yaml up --detach --wait --wait-timeout 120
+go run ./cmd/nacos-secure-fixture generate "$NEKIRO_E2E_TLS_ROOT"
+docker compose --project-name nekiro-stack \
+  --file compose.yaml \
+  --file compose.router-nacos-secure.yaml \
+  --profile router-nacos-secure \
+  up --detach --wait --wait-timeout 120
 go test -tags=e2e -count=1 ./tests/backend
 ```
 
@@ -93,12 +98,6 @@ mTLS endpoints before observing those leases. Negative containers
 with a wrong CA, wrong server name, or missing mTLS client identity must fail
 before publication and leave no routable instance. Test keys exist only in the
 caller-owned runtime directory and are never committed or recorded in Ledger.
-
-For a local backend run, generate the ephemeral material before Compose starts:
-
-```bash
-go run ./cmd/nacos-secure-fixture generate "$NEKIRO_E2E_TLS_ROOT"
-```
 
 The secure fixture exposes only a status endpoint on the host. Its counters
 prove that the Router completed authenticated HTTP reads and established the

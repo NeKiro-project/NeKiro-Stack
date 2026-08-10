@@ -105,6 +105,7 @@ NEKIRO_ROUTER_INSTANCE_DIRECTORY_KEY=router.nacos-bindings
 EOF
     printf 'NEKIRO_E2E_CONFIG_CENTER_ROOT=%s\n' "$config_root" >>"$output"
     printf 'NEKIRO_E2E_NACOS_URL=http://127.0.0.1:%s/nacos\n' "${NACOS_PORT:-18848}" >>"$output"
+    printf 'NEKIRO_E2E_COMPOSE_OVERRIDE_FILE=%s/compose.router-nacos-secure.yaml\n' "$stack_root" >>"$output"
     ;;
   browser)
     write_common
