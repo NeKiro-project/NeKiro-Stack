@@ -62,6 +62,7 @@ type acceptanceEnv struct {
 	tlsRoot             string
 	tlsPort             string
 	mtlsPort            string
+	secureNacos         *secureNacosFixture
 }
 
 func (env *acceptanceEnv) forbid(values ...string) {

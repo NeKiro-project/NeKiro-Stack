@@ -20,6 +20,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -29,9 +30,16 @@ type secureNacosMaterial struct {
 	caPool *x509.CertPool
 }
 
+type secureNacosFixture struct {
+	tlsAttempts  atomic.Int64
+	mtlsAttempts atomic.Int64
+}
+
 func startSecureNacosFixture(t *testing.T, env *acceptanceEnv) {
 	t.Helper()
 	material := writeSecureNacosMaterial(t, env.tlsRoot)
+	fixture := &secureNacosFixture{}
+	env.secureNacos = fixture
 	target, err := url.Parse(env.nacosURL)
 	if err != nil {
 		t.Fatal(err)
@@ -47,7 +55,14 @@ func startSecureNacosFixture(t *testing.T, env *acceptanceEnv) {
 		proxy.ErrorHandler = func(writer http.ResponseWriter, _ *http.Request, _ error) {
 			http.Error(writer, "Nacos fixture upstream unavailable", http.StatusBadGateway)
 		}
-		serverTLS := &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{material.server}}
+		attempts := &fixture.tlsAttempts
+		if requireClient {
+			attempts = &fixture.mtlsAttempts
+		}
+		serverTLS := &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{material.server}, GetConfigForClient: func(*tls.ClientHelloInfo) (*tls.Config, error) {
+			attempts.Add(1)
+			return nil, nil
+		}}
 		if requireClient {
 			serverTLS.ClientAuth = tls.RequireAndVerifyClientCert
 			serverTLS.ClientCAs = material.caPool
@@ -65,29 +80,32 @@ func startSecureNacosFixture(t *testing.T, env *acceptanceEnv) {
 
 func assertSecureRegistrationFailureMatrix(t *testing.T, env acceptanceEnv) {
 	t.Helper()
-	for name, overrides := range map[string][]string{
-		"wrong CA": {
+	for name, test := range map[string]struct {
+		overrides        []string
+		expectTLSAttempt bool
+	}{
+		"wrong CA": {overrides: []string{
 			"RUNTIME_B_NACOS_TLS_CA_FILE=/var/run/nekiro-nacos-tls/wrong-ca.pem",
 			"RUNTIME_B_NACOS_TLS_CLIENT_CERT_FILE=/var/run/nekiro-nacos-tls/client.pem",
 			"RUNTIME_B_NACOS_TLS_CLIENT_KEY_FILE=/var/run/nekiro-nacos-tls/client-key.pem",
-		},
-		"wrong server name": {
+		}, expectTLSAttempt: true},
+		"wrong server name": {overrides: []string{
 			"RUNTIME_B_NACOS_TLS_CA_FILE=/var/run/nekiro-nacos-tls/ca.pem",
 			"RUNTIME_B_NACOS_TLS_SERVER_NAME=other.internal",
 			"RUNTIME_B_NACOS_TLS_CLIENT_CERT_FILE=/var/run/nekiro-nacos-tls/client.pem",
 			"RUNTIME_B_NACOS_TLS_CLIENT_KEY_FILE=/var/run/nekiro-nacos-tls/client-key.pem",
-		},
-		"missing mTLS client": {
+		}, expectTLSAttempt: true},
+		"missing mTLS client": {overrides: []string{
 			"RUNTIME_B_NACOS_TLS_CA_FILE=/var/run/nekiro-nacos-tls/ca.pem",
 			"RUNTIME_B_NACOS_TLS_SERVER_NAME=nacos.internal",
 			"RUNTIME_B_NACOS_TLS_CLIENT_CERT_FILE=",
 			"RUNTIME_B_NACOS_TLS_CLIENT_KEY_FILE=",
-		},
+		}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			service := "runtime-b-negative-" + strings.ReplaceAll(strings.ToLower(name), " ", "-")
 			args := []string{"--profile", "runtime-registration", "run", "--rm", "--no-deps"}
-			for _, override := range overrides {
+			for _, override := range test.overrides {
 				args = append(args, "-e", override)
 			}
 			args = append(args,
@@ -96,6 +114,7 @@ func assertSecureRegistrationFailureMatrix(t *testing.T, env acceptanceEnv) {
 				"runtime-b-directory",
 			)
 			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+			beforeAttempts := env.secureNacos.mtlsAttempts.Load()
 			output, err := composeCommand(ctx, env, args...).CombinedOutput()
 			cancel()
 			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
@@ -103,6 +122,9 @@ func assertSecureRegistrationFailureMatrix(t *testing.T, env acceptanceEnv) {
 			}
 			if err == nil {
 				t.Fatalf("invalid secure registration unexpectedly succeeded: %s", output)
+			}
+			if test.expectTLSAttempt && env.secureNacos.mtlsAttempts.Load() <= beforeAttempts {
+				t.Fatalf("invalid secure registration failed before reaching the mTLS boundary: %s", output)
 			}
 			outputText := string(output)
 			for _, forbidden := range []string{"/var/run/nekiro-nacos-tls", "PRIVATE KEY", "BEGIN CERTIFICATE", "wrong-ca.pem"} {
@@ -134,7 +156,7 @@ func assertNoNacosInstance(t *testing.T, env acceptanceEnv, service string) {
 
 func writeSecureNacosMaterial(t *testing.T, directory string) secureNacosMaterial {
 	t.Helper()
-	if err := os.MkdirAll(directory, 0o700); err != nil {
+	if err := os.MkdirAll(directory, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	caPublic, caPrivate, err := ed25519.GenerateKey(rand.Reader)
@@ -153,7 +175,9 @@ func writeSecureNacosMaterial(t *testing.T, directory string) secureNacosMateria
 	}
 	write := func(name string, content []byte) string {
 		path := filepath.Join(directory, name)
-		if err := os.WriteFile(path, content, 0o600); err != nil {
+		// These are ephemeral acceptance credentials mounted read-only into
+		// non-root fixture containers; repository and product storage never see them.
+		if err := os.WriteFile(path, content, 0o444); err != nil {
 			t.Fatal(err)
 		}
 		return path
