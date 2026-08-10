@@ -59,6 +59,9 @@ type acceptanceEnv struct {
 	publicAgentIDs      map[string]string
 	credentialForbidden []string
 	forbidden           []string
+	tlsRoot             string
+	tlsPort             string
+	mtlsPort            string
 }
 
 func (env *acceptanceEnv) forbid(values ...string) {
@@ -86,6 +89,7 @@ type httpResult struct {
 
 func TestInvokeToRecordAcceptance(t *testing.T) {
 	env := loadAcceptanceEnv(t)
+	startSecureNacosFixture(t, &env)
 	env.credentialForbidden = []string{
 		"acceptance-owner-token", "acceptance-user-token", "acceptance-other-token",
 		"router-internal-token", "control-plane-internal-token", "runtime-a-router-token",
@@ -278,6 +282,9 @@ func loadAcceptanceEnv(t *testing.T) acceptanceEnv {
 		userToken:         requiredEnv(t, "NEKIRO_E2E_USER_TOKEN"),
 		otherToken:        requiredEnv(t, "NEKIRO_E2E_OTHER_TOKEN"),
 		databaseURL:       requiredEnv(t, "NEKIRO_E2E_DATABASE_URL"),
+		tlsRoot:           requiredEnv(t, "NEKIRO_E2E_TLS_ROOT"),
+		tlsPort:           requiredEnv(t, "NEKIRO_E2E_NACOS_TLS_PORT"),
+		mtlsPort:          requiredEnv(t, "NEKIRO_E2E_NACOS_MTLS_PORT"),
 		composeFile:       composeFile,
 		composeProject:    requiredEnv(t, "NEKIRO_E2E_COMPOSE_PROJECT"),
 		challengeTTL:      time.Duration(ttlSeconds) * time.Second,
@@ -312,6 +319,7 @@ func assertNacosRegistrations(t *testing.T, client *http.Client, env acceptanceE
 
 func startRegisteredRuntimes(t *testing.T, env acceptanceEnv) {
 	t.Helper()
+	assertSecureRegistrationFailureMatrix(t, env)
 	command := composeCommand(
 		t.Context(), env,
 		"--profile", "runtime-registration", "up", "--detach", "--no-deps", "--force-recreate",

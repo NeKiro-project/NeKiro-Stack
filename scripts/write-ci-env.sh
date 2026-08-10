@@ -17,7 +17,9 @@ fi
 
 write_common() {
   config_root="$stack_root/.runtime-config/$compose_project"
+  tls_root="$stack_root/.runtime-tls/$compose_project"
   mkdir -p "$config_root"
+  mkdir -p "$tls_root"
   printf '%s\n' '{"schemaVersion":"1","revision":"stack-bootstrap-1","targets":[]}' >"$config_root/cfg-v1-cm91dGVyL2luc3RhbmNlLWRpcmVjdG9yeQ.value"
   cat >>"$output" <<'EOF'
 POSTGRES_PORT=55432
@@ -56,8 +58,11 @@ NEKIRO_ROUTER_NACOS_REQUEST_TIMEOUT_MS=3000
 NEKIRO_ROUTER_NACOS_GRPC_REQUEST_TIMEOUT_MS=3000
 NEKIRO_ROUTER_NACOS_PENDING_CHANGES=64
 NEKIRO_ROUTER_NACOS_MAX_OBSERVATIONS=1024
+NEKIRO_E2E_NACOS_TLS_PORT=19443
+NEKIRO_E2E_NACOS_MTLS_PORT=19444
 EOF
   printf 'NEKIRO_ROUTER_CONFIG_CENTER_ROOT=%s\n' "$config_root" >>"$output"
+  printf 'NEKIRO_E2E_TLS_ROOT=%s\n' "$tls_root" >>"$output"
   printf 'NEKIRO_E2E_COMPOSE_FILE=%s/compose.yaml\n' "$stack_root" >>"$output"
   printf 'NEKIRO_E2E_COMPOSE_PROJECT=%s\n' "$compose_project" >>"$output"
 }
