@@ -37,7 +37,7 @@ type secureNacosFixture struct {
 
 func startSecureNacosFixture(t *testing.T, env *acceptanceEnv) {
 	t.Helper()
-	material := writeSecureNacosMaterial(t, env.tlsRoot)
+	material := loadSecureNacosMaterial(t, env.tlsRoot)
 	fixture := &secureNacosFixture{}
 	env.secureNacos = fixture
 	target, err := url.Parse(env.nacosURL)
@@ -76,6 +76,23 @@ func startSecureNacosFixture(t *testing.T, env *acceptanceEnv) {
 	}
 	start(env.tlsPort, false)
 	start(env.mtlsPort, true)
+}
+
+func loadSecureNacosMaterial(t *testing.T, directory string) secureNacosMaterial {
+	t.Helper()
+	server, err := tls.LoadX509KeyPair(filepath.Join(directory, "server.pem"), filepath.Join(directory, "server-key.pem"))
+	if err != nil {
+		t.Fatalf("load generated secure Nacos server identity: %v", err)
+	}
+	caPEM, err := os.ReadFile(filepath.Join(directory, "ca.pem"))
+	if err != nil {
+		t.Fatalf("load generated secure Nacos CA: %v", err)
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(caPEM) {
+		t.Fatal("parse generated secure Nacos CA")
+	}
+	return secureNacosMaterial{server: server, caPool: pool}
 }
 
 func assertSecureRegistrationFailureMatrix(t *testing.T, env acceptanceEnv) {

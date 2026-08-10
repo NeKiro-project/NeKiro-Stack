@@ -40,6 +40,36 @@ services:
       - platform-internal
     restart: "no"
 
+  nacos-secure:
+    profiles: ["router-nacos-secure"]
+    image: "${NEKIRO_NACOS_SECURE_PROXY_IMAGE:?NEKIRO_NACOS_SECURE_PROXY_IMAGE must be set to the prepared immutable image}"
+    command: ["serve"]
+    environment:
+      NEKIRO_NACOS_FIXTURE_TLS_ROOT: "/var/run/nekiro-nacos-tls"
+      NEKIRO_NACOS_FIXTURE_HTTP_LISTEN: "0.0.0.0:9443"
+      NEKIRO_NACOS_FIXTURE_HTTP_UPSTREAM: "http://nacos:8848"
+      NEKIRO_NACOS_FIXTURE_GRPC_LISTEN: "0.0.0.0:9848"
+      NEKIRO_NACOS_FIXTURE_GRPC_UPSTREAM: "nacos:9848"
+      NEKIRO_NACOS_FIXTURE_STATUS_LISTEN: "0.0.0.0:9090"
+    volumes:
+      - "${NEKIRO_E2E_TLS_ROOT:?NEKIRO_E2E_TLS_ROOT must be set and non-empty}:/var/run/nekiro-nacos-tls:ro"
+    ports:
+      - "127.0.0.1:${NEKIRO_E2E_NACOS_ROUTER_HTTP_PORT:?NEKIRO_E2E_NACOS_ROUTER_HTTP_PORT must be set and non-empty}:9443"
+      - "127.0.0.1:${NEKIRO_E2E_NACOS_ROUTER_GRPC_PORT:?NEKIRO_E2E_NACOS_ROUTER_GRPC_PORT must be set and non-empty}:9848"
+      - "127.0.0.1:${NEKIRO_E2E_NACOS_FIXTURE_STATUS_PORT:?NEKIRO_E2E_NACOS_FIXTURE_STATUS_PORT must be set and non-empty}:9090"
+    depends_on:
+      nacos:
+        condition: service_healthy
+    networks:
+      - platform-internal
+      - local-access
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9090/readyz"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+
   postgres:
     image: postgres:17.9-bookworm@sha256:47f917f7409eacd22fc5dfb1dee634e1b55cf0c01d1a7eb701be2227a03e0641
     environment:

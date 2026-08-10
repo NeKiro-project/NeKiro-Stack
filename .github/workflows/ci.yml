@@ -85,6 +85,7 @@ jobs:
         shell: bash
         run: |
           docker compose --file compose.yaml config --quiet
+          docker compose --file compose.yaml --file compose.router-nacos-secure.yaml --profile router-nacos-secure config --quiet
           if grep -nE '^[[:space:]]+build:|image:[[:space:]].*(latest|:(main|master))([[:space:]"@]|$)' compose.yaml; then
             echo 'Compose contains a source build or floating image.' >&2
             exit 1
@@ -116,13 +117,16 @@ jobs:
         run: |
           ./scripts/prepare.sh "$GITHUB_WORKSPACE/components.json" "$WORK_ROOT" "$PREPARED_ENV"
           source "$PREPARED_ENV"
-          for name in NEKIRO_CONTROL_PLANE_IMAGE NEKIRO_A2A_ROUTER_IMAGE NEKIRO_RUNTIME_A_IMAGE NEKIRO_RUNTIME_B_IMAGE NEKIRO_STACK_CORE_DIR NEKIRO_STACK_CONSOLE_DIR NEKIRO_STACK_SDK_GO_DIR NEKIRO_STACK_SAMPLES_DIR NEKIRO_STACK_TRANSPORT_GO_DIR; do
+          for name in NEKIRO_CONTROL_PLANE_IMAGE NEKIRO_A2A_ROUTER_IMAGE NEKIRO_RUNTIME_A_IMAGE NEKIRO_RUNTIME_B_IMAGE NEKIRO_NACOS_SECURE_PROXY_IMAGE NEKIRO_STACK_CORE_DIR NEKIRO_STACK_CONSOLE_DIR NEKIRO_STACK_SDK_GO_DIR NEKIRO_STACK_SAMPLES_DIR NEKIRO_STACK_TRANSPORT_GO_DIR; do
             printf '%s=%s\n' "$name" "${!name}" >>"$GITHUB_ENV"
           done
           printf 'NEKIRO_STACK_PREPARED_ENV=%s\n' "$PREPARED_ENV" >>"$GITHUB_ENV"
 
+      - name: Generate ephemeral Nacos PKI
+        run: go run ./cmd/nacos-secure-fixture generate "$NEKIRO_E2E_TLS_ROOT"
+
       - name: Start fresh exact backend assembly
-        run: docker compose --project-name "$NEKIRO_E2E_COMPOSE_PROJECT" --file compose.yaml up --detach --wait --wait-timeout 120
+        run: docker compose --project-name "$NEKIRO_E2E_COMPOSE_PROJECT" --file compose.yaml --file "$NEKIRO_E2E_COMPOSE_OVERRIDE_FILE" --profile router-nacos-secure up --detach --wait --wait-timeout 120
 
       - name: Run trusted publication Invoke-to-Record acceptance
         run: go test -tags=e2e -count=1 ./tests/backend
@@ -130,11 +134,11 @@ jobs:
       - name: Capture sanitized backend logs
         if: always() && steps.prepare.outcome == 'success'
         shell: bash
-        run: docker compose --project-name "$NEKIRO_E2E_COMPOSE_PROJECT" --file compose.yaml --profile runtime-registration --profile watch-refresh logs --no-color 2>&1 | perl scripts/sanitize-logs.pl
+        run: docker compose --project-name "$NEKIRO_E2E_COMPOSE_PROJECT" --file compose.yaml --file "$NEKIRO_E2E_COMPOSE_OVERRIDE_FILE" --profile router-nacos-secure --profile runtime-registration --profile watch-refresh logs --no-color 2>&1 | perl scripts/sanitize-logs.pl
 
       - name: Tear down backend assembly
         if: always() && steps.prepare.outcome == 'success'
-        run: docker compose --project-name "$NEKIRO_E2E_COMPOSE_PROJECT" --file compose.yaml --profile runtime-registration --profile watch-refresh down --volumes --remove-orphans
+        run: docker compose --project-name "$NEKIRO_E2E_COMPOSE_PROJECT" --file compose.yaml --file "$NEKIRO_E2E_COMPOSE_OVERRIDE_FILE" --profile router-nacos-secure --profile runtime-registration --profile watch-refresh down --volumes --remove-orphans
 
   browser:
     runs-on: ubuntu-latest
@@ -173,7 +177,7 @@ jobs:
         run: |
           ./scripts/prepare.sh "$GITHUB_WORKSPACE/components.json" "$WORK_ROOT" "$PREPARED_ENV"
           source "$PREPARED_ENV"
-          for name in NEKIRO_CONTROL_PLANE_IMAGE NEKIRO_A2A_ROUTER_IMAGE NEKIRO_RUNTIME_A_IMAGE NEKIRO_RUNTIME_B_IMAGE NEKIRO_STACK_CORE_DIR NEKIRO_STACK_CONSOLE_DIR NEKIRO_STACK_SDK_GO_DIR NEKIRO_STACK_SAMPLES_DIR NEKIRO_STACK_TRANSPORT_GO_DIR; do
+          for name in NEKIRO_CONTROL_PLANE_IMAGE NEKIRO_A2A_ROUTER_IMAGE NEKIRO_RUNTIME_A_IMAGE NEKIRO_RUNTIME_B_IMAGE NEKIRO_NACOS_SECURE_PROXY_IMAGE NEKIRO_STACK_CORE_DIR NEKIRO_STACK_CONSOLE_DIR NEKIRO_STACK_SDK_GO_DIR NEKIRO_STACK_SAMPLES_DIR NEKIRO_STACK_TRANSPORT_GO_DIR; do
             printf '%s=%s\n' "$name" "${!name}" >>"$GITHUB_ENV"
           done
           printf 'NEKIRO_STACK_PREPARED_ENV=%s\n' "$PREPARED_ENV" >>"$GITHUB_ENV"

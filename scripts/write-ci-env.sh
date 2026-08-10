@@ -60,6 +60,9 @@ NEKIRO_ROUTER_NACOS_PENDING_CHANGES=64
 NEKIRO_ROUTER_NACOS_MAX_OBSERVATIONS=1024
 NEKIRO_E2E_NACOS_TLS_PORT=19443
 NEKIRO_E2E_NACOS_MTLS_PORT=19444
+NEKIRO_E2E_NACOS_ROUTER_HTTP_PORT=19445
+NEKIRO_E2E_NACOS_ROUTER_GRPC_PORT=19446
+NEKIRO_E2E_NACOS_FIXTURE_STATUS_PORT=19447
 EOF
   printf 'NEKIRO_ROUTER_CONFIG_CENTER_ROOT=%s\n' "$config_root" >>"$output"
   printf 'NEKIRO_E2E_TLS_ROOT=%s\n' "$tls_root" >>"$output"
@@ -96,11 +99,13 @@ NEKIRO_E2E_OWNER_TOKEN=acceptance-owner-token
 NEKIRO_E2E_USER_TOKEN=acceptance-user-token
 NEKIRO_E2E_OTHER_TOKEN=acceptance-other-token
 NEKIRO_E2E_DATABASE_URL=postgresql://nekiro_acceptance:acceptance-only-password@127.0.0.1:55432/nekiro_acceptance?sslmode=disable
+NEKIRO_E2E_NACOS_FIXTURE_STATUS_URL=http://127.0.0.1:19447/status
 NEKIRO_ROUTER_INSTANCE_ROUTING_MODE=nacos
 NEKIRO_ROUTER_INSTANCE_DIRECTORY_KEY=router.nacos-bindings
 EOF
     printf 'NEKIRO_E2E_CONFIG_CENTER_ROOT=%s\n' "$config_root" >>"$output"
     printf 'NEKIRO_E2E_NACOS_URL=http://127.0.0.1:%s/nacos\n' "${NACOS_PORT:-18848}" >>"$output"
+    printf 'NEKIRO_E2E_COMPOSE_OVERRIDE_FILE=%s/compose.router-nacos-secure.yaml\n' "$stack_root" >>"$output"
     ;;
   browser)
     write_common
@@ -158,6 +163,7 @@ NEKIRO_CONTROL_PLANE_IMAGE=nekiro-control-plane:compose-check
 NEKIRO_A2A_ROUTER_IMAGE=nekiro-a2a-router:compose-check
 NEKIRO_RUNTIME_A_IMAGE=nekiro-runtime-a:compose-check
 NEKIRO_RUNTIME_B_IMAGE=nekiro-runtime-b:compose-check
+NEKIRO_NACOS_SECURE_PROXY_IMAGE=nekiro-nacos-secure-fixture:compose-check
 NEKIRO_ROUTER_INSTANCE_ROUTING_MODE=direct
 EOF
     ;;

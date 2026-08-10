@@ -44,12 +44,14 @@ type acceptanceEnv struct {
 	publicAgentOrigin   string
 	routerURL           string
 	nacosURL            string
+	nacosFixtureStatus  string
 	routerToken         string
 	ownerToken          string
 	userToken           string
 	otherToken          string
 	databaseURL         string
 	composeFile         string
+	composeOverride     string
 	composeProject      string
 	challengeTTL        time.Duration
 	credentialIssuer    string
@@ -260,40 +262,62 @@ func TestInvokeToRecordAcceptance(t *testing.T) {
 
 	assertFailureMatrix(t, client, env)
 	assertConcurrentCalls(t, client, env)
+	assertRouterUsedSecureNacosBoundaries(t, client, env)
 	assertStorageAndLogsAreMetadataOnly(t, env)
 }
 
 func loadAcceptanceEnv(t *testing.T) acceptanceEnv {
 	t.Helper()
 	composeFile := requiredEnv(t, "NEKIRO_E2E_COMPOSE_FILE")
-	if !filepath.IsAbs(composeFile) {
-		t.Fatalf("NEKIRO_E2E_COMPOSE_FILE must be an absolute path")
+	composeOverride := requiredEnv(t, "NEKIRO_E2E_COMPOSE_OVERRIDE_FILE")
+	if !filepath.IsAbs(composeFile) || !filepath.IsAbs(composeOverride) {
+		t.Fatalf("E2E Compose files must use absolute paths")
 	}
 	ttlSeconds, err := strconv.ParseInt(requiredEnv(t, "NEKIRO_ENDPOINT_CHALLENGE_TTL_SECONDS"), 10, 64)
 	if err != nil || ttlSeconds < 2 || ttlSeconds > 15 {
 		t.Fatalf("NEKIRO_ENDPOINT_CHALLENGE_TTL_SECONDS must be an acceptance value from 2 through 15 seconds")
 	}
 	return acceptanceEnv{
-		controlPlane:      requiredEnv(t, "NEKIRO_E2E_CONTROL_PLANE_URL"),
-		publicAgentOrigin: requiredEnv(t, "NEKIRO_E2E_PUBLIC_AGENT_ORIGIN"),
-		routerURL:         requiredEnv(t, "NEKIRO_E2E_ROUTER_URL"),
-		nacosURL:          requiredEnv(t, "NEKIRO_E2E_NACOS_URL"),
-		routerToken:       requiredEnv(t, "NEKIRO_E2E_ROUTER_TOKEN"),
-		ownerToken:        requiredEnv(t, "NEKIRO_E2E_OWNER_TOKEN"),
-		userToken:         requiredEnv(t, "NEKIRO_E2E_USER_TOKEN"),
-		otherToken:        requiredEnv(t, "NEKIRO_E2E_OTHER_TOKEN"),
-		databaseURL:       requiredEnv(t, "NEKIRO_E2E_DATABASE_URL"),
-		tlsRoot:           requiredEnv(t, "NEKIRO_E2E_TLS_ROOT"),
-		tlsPort:           requiredEnv(t, "NEKIRO_E2E_NACOS_TLS_PORT"),
-		mtlsPort:          requiredEnv(t, "NEKIRO_E2E_NACOS_MTLS_PORT"),
-		composeFile:       composeFile,
-		composeProject:    requiredEnv(t, "NEKIRO_E2E_COMPOSE_PROJECT"),
-		challengeTTL:      time.Duration(ttlSeconds) * time.Second,
-		credentialIssuer:  requiredEnv(t, "NEKIRO_ROUTER_AGENT_CREDENTIAL_ISSUER"),
-		credentialKeyID:   requiredEnv(t, "NEKIRO_ROUTER_AGENT_CREDENTIAL_KEY_ID"),
-		credentialPrivate: requiredEnv(t, "NEKIRO_ROUTER_AGENT_CREDENTIAL_PRIVATE_KEY_BASE64URL"),
-		releases:          make(map[string]contracts.AgentReleaseResponse),
-		publicAgentIDs:    make(map[string]string),
+		controlPlane:       requiredEnv(t, "NEKIRO_E2E_CONTROL_PLANE_URL"),
+		publicAgentOrigin:  requiredEnv(t, "NEKIRO_E2E_PUBLIC_AGENT_ORIGIN"),
+		routerURL:          requiredEnv(t, "NEKIRO_E2E_ROUTER_URL"),
+		nacosURL:           requiredEnv(t, "NEKIRO_E2E_NACOS_URL"),
+		nacosFixtureStatus: requiredEnv(t, "NEKIRO_E2E_NACOS_FIXTURE_STATUS_URL"),
+		routerToken:        requiredEnv(t, "NEKIRO_E2E_ROUTER_TOKEN"),
+		ownerToken:         requiredEnv(t, "NEKIRO_E2E_OWNER_TOKEN"),
+		userToken:          requiredEnv(t, "NEKIRO_E2E_USER_TOKEN"),
+		otherToken:         requiredEnv(t, "NEKIRO_E2E_OTHER_TOKEN"),
+		databaseURL:        requiredEnv(t, "NEKIRO_E2E_DATABASE_URL"),
+		tlsRoot:            requiredEnv(t, "NEKIRO_E2E_TLS_ROOT"),
+		tlsPort:            requiredEnv(t, "NEKIRO_E2E_NACOS_TLS_PORT"),
+		mtlsPort:           requiredEnv(t, "NEKIRO_E2E_NACOS_MTLS_PORT"),
+		composeFile:        composeFile,
+		composeOverride:    composeOverride,
+		composeProject:     requiredEnv(t, "NEKIRO_E2E_COMPOSE_PROJECT"),
+		challengeTTL:       time.Duration(ttlSeconds) * time.Second,
+		credentialIssuer:   requiredEnv(t, "NEKIRO_ROUTER_AGENT_CREDENTIAL_ISSUER"),
+		credentialKeyID:    requiredEnv(t, "NEKIRO_ROUTER_AGENT_CREDENTIAL_KEY_ID"),
+		credentialPrivate:  requiredEnv(t, "NEKIRO_ROUTER_AGENT_CREDENTIAL_PRIVATE_KEY_BASE64URL"),
+		releases:           make(map[string]contracts.AgentReleaseResponse),
+		publicAgentIDs:     make(map[string]string),
+	}
+}
+
+func assertRouterUsedSecureNacosBoundaries(t *testing.T, client *http.Client, env acceptanceEnv) {
+	t.Helper()
+	result := doRequest(t, client, env.nacosFixtureStatus, http.MethodGet, "", "", nil)
+	var status struct {
+		HTTPRequests    int64 `json:"httpRequests"`
+		GRPCConnections int64 `json:"grpcConnections"`
+	}
+	if result.status != http.StatusOK || json.Unmarshal(result.body, &status) != nil {
+		t.Fatalf("secure Nacos fixture status=%d body=%s", result.status, result.body)
+	}
+	if status.HTTPRequests < 2 {
+		t.Fatalf("Router did not complete both secure Config Center and Naming HTTP reads: %#v", status)
+	}
+	if status.GRPCConnections < 1 {
+		t.Fatalf("Router did not establish the secure Nacos gRPC watch: %#v", status)
 	}
 }
 
@@ -524,7 +548,7 @@ func requiredEnv(t *testing.T, name string) string {
 }
 
 func composeCommand(ctx context.Context, env acceptanceEnv, args ...string) *exec.Cmd {
-	base := []string{"compose", "--project-name", env.composeProject, "--file", env.composeFile}
+	base := []string{"compose", "--project-name", env.composeProject, "--file", env.composeFile, "--file", env.composeOverride, "--profile", "router-nacos-secure"}
 	command := exec.CommandContext(ctx, "docker", append(base, args...)...)
 	command.Env = append(os.Environ(), runtimeRegistrationEnvironment(env)...)
 	return command
