@@ -323,12 +323,18 @@ func startRegisteredRuntimes(t *testing.T, env acceptanceEnv) {
 
 func replaceRuntimeBNacosInstance(t *testing.T, client *http.Client, env acceptanceEnv) {
 	t.Helper()
+	release := env.releases["runtime-b"]
+	populated := waitForRouterTopologyState(t, client, env, release, contracts.RouterTopologyStatePopulated, 0)
 	stop := composeCommand(t.Context(), env, "--profile", "runtime-registration", "stop", "runtime-b-directory")
 	if output, err := stop.CombinedOutput(); err != nil {
 		t.Fatalf("stop original Runtime B directory instance: %v output=%s", err, output)
 	}
 	waitForNacosInstanceRemoval(t, client, env, "runtime-b")
-	assertRemovedRuntimeRejected(t, client, env)
+	empty := waitForRouterTopologyState(t, client, env, release, contracts.RouterTopologyStateEmpty, populated.LocalRevision+1)
+	if !empty.ObservedAt.After(populated.ObservedAt) {
+		t.Fatalf("Router empty observation time=%s did not advance after populated time=%s", empty.ObservedAt, populated.ObservedAt)
+	}
+	assertRemovedRuntimeRejected(t, client, env, contracts.ErrorCodeDependency)
 
 	start := composeCommand(
 		t.Context(), env,
@@ -339,6 +345,42 @@ func replaceRuntimeBNacosInstance(t *testing.T, client *http.Client, env accepta
 		t.Fatalf("start replacement Runtime B directory instance: %v output=%s", err, output)
 	}
 	waitForNacosInstance(t, client, env, "runtime-b", "runtime-b-primary")
+	recovered := waitForRouterTopologyState(t, client, env, release, contracts.RouterTopologyStatePopulated, empty.LocalRevision+1)
+	if !recovered.ObservedAt.After(empty.ObservedAt) {
+		t.Fatalf("Router recovery observation time=%s did not advance after empty time=%s", recovered.ObservedAt, empty.ObservedAt)
+	}
+}
+
+func waitForRouterTopologyState(
+	t *testing.T,
+	client *http.Client,
+	env acceptanceEnv,
+	release contracts.AgentReleaseResponse,
+	wantState contracts.RouterTopologyObservationState,
+	minimumRevision uint64,
+) contracts.RouterTopologyStatusObservationV1 {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	var last httpResult
+	for time.Now().Before(deadline) {
+		last = doRequest(t, client, env.routerURL+"/internal/v1/instance-topology/status", http.MethodGet, env.routerToken, "", nil)
+		var status contracts.RouterTopologyStatusV1
+		if last.status == http.StatusOK {
+			assertNoForbiddenBody(t, last.body, env.forbidden, "Router topology status")
+		}
+		if last.status == http.StatusOK && json.Unmarshal(last.body, &status) == nil && contracts.ValidateRouterTopologyStatusV1(status) == nil && status.Provider == "nacos" {
+			for _, observation := range status.Observations {
+				if observation.AgentID == release.AgentID && observation.AgentCardVersion == release.AgentCardVersion && observation.ReleaseID == release.ReleaseID &&
+					observation.State == wantState && observation.LocalRevision >= minimumRevision {
+					return observation
+				}
+			}
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	t.Fatalf("Router topology did not reach %s at revision >= %d for %s/%s/%s: status=%d body=%s",
+		wantState, minimumRevision, release.AgentID, release.AgentCardVersion, release.ReleaseID, last.status, last.body)
+	return contracts.RouterTopologyStatusObservationV1{}
 }
 
 func waitForNacosInstanceRemoval(t *testing.T, client *http.Client, env acceptanceEnv, serviceName string) {
@@ -369,7 +411,7 @@ func waitForNacosInstanceRemoval(t *testing.T, client *http.Client, env acceptan
 	t.Fatalf("Nacos service %s retained an instance after lease close: status=%d body=%s", serviceName, last.status, last.body)
 }
 
-func assertRemovedRuntimeRejected(t *testing.T, client *http.Client, env acceptanceEnv) {
+func assertRemovedRuntimeRejected(t *testing.T, client *http.Client, env acceptanceEnv, wantCode contracts.PlatformErrorCode) {
 	t.Helper()
 	deadline := time.Now().Add(30 * time.Second)
 	var last httpResult
@@ -383,14 +425,14 @@ func assertRemovedRuntimeRejected(t *testing.T, client *http.Client, env accepta
 		}
 		last = result
 		var observation platformErrorObservation
-		if result.status != http.StatusOK && json.Unmarshal(result.body, &observation) == nil && observation.Code == contracts.ErrorCodeAgentUnavailable && observation.InvocationID != "" && observation.RootTaskID != "" {
-			validated := assertCorrelatedInvocationError(t, result, contracts.ErrorCodeAgentUnavailable, env.forbidden)
-			assertRecord(t, client, env, validated.InvocationID, acceptanceWorkspace, "runtime-b", "failed", string(contracts.ErrorCodeAgentUnavailable))
+		if result.status != http.StatusOK && json.Unmarshal(result.body, &observation) == nil && observation.Code == wantCode && observation.InvocationID != "" && observation.RootTaskID != "" {
+			validated := assertCorrelatedInvocationError(t, result, wantCode, env.forbidden)
+			assertRecord(t, client, env, validated.InvocationID, acceptanceWorkspace, "runtime-b", "failed", string(wantCode))
 			return
 		}
 		time.Sleep(250 * time.Millisecond)
 	}
-	t.Fatalf("Router did not fail closed after Runtime B lease removal: status=%d body=%s", last.status, last.body)
+	t.Fatalf("Router did not fail closed with %s after observed Runtime B lease removal: status=%d body=%s", wantCode, last.status, last.body)
 }
 
 func waitForNacosInstance(t *testing.T, client *http.Client, env acceptanceEnv, serviceName, instanceID string) {
