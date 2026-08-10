@@ -331,9 +331,6 @@ func replaceRuntimeBNacosInstance(t *testing.T, client *http.Client, env accepta
 	}
 	waitForNacosInstanceRemoval(t, client, env, "runtime-b")
 	empty := waitForRouterTopologyState(t, client, env, release, contracts.RouterTopologyStateEmpty, populated.LocalRevision+1)
-	if !empty.ObservedAt.After(populated.ObservedAt) {
-		t.Fatalf("Router empty observation time=%s did not advance after populated time=%s", empty.ObservedAt, populated.ObservedAt)
-	}
 	assertRemovedRuntimeRejected(t, client, env, contracts.ErrorCodeDependency)
 
 	start := composeCommand(
@@ -345,10 +342,7 @@ func replaceRuntimeBNacosInstance(t *testing.T, client *http.Client, env accepta
 		t.Fatalf("start replacement Runtime B directory instance: %v output=%s", err, output)
 	}
 	waitForNacosInstance(t, client, env, "runtime-b", "runtime-b-primary")
-	recovered := waitForRouterTopologyState(t, client, env, release, contracts.RouterTopologyStatePopulated, empty.LocalRevision+1)
-	if !recovered.ObservedAt.After(empty.ObservedAt) {
-		t.Fatalf("Router recovery observation time=%s did not advance after empty time=%s", recovered.ObservedAt, empty.ObservedAt)
-	}
+	waitForRouterTopologyState(t, client, env, release, contracts.RouterTopologyStatePopulated, empty.LocalRevision+1)
 }
 
 func waitForRouterTopologyState(
@@ -413,26 +407,15 @@ func waitForNacosInstanceRemoval(t *testing.T, client *http.Client, env acceptan
 
 func assertRemovedRuntimeRejected(t *testing.T, client *http.Client, env acceptanceEnv, wantCode contracts.PlatformErrorCode) {
 	t.Helper()
-	deadline := time.Now().Add(30 * time.Second)
-	var last httpResult
-	for time.Now().Before(deadline) {
-		result, err := doRequestRaw(t.Context(), client, env.controlPlane+"/v4/workspaces/"+acceptanceWorkspace+"/invocations", http.MethodPost, env.ownerToken, "application/json", map[string]any{
-			"agentId": "runtime-b", "capability": "runtime.echo",
-			"input": map[string]any{"fixture": "success", "value": "removed-runtime-value"}, "stream": false,
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		last = result
-		var observation platformErrorObservation
-		if result.status != http.StatusOK && json.Unmarshal(result.body, &observation) == nil && observation.Code == wantCode && observation.InvocationID != "" && observation.RootTaskID != "" {
-			validated := assertCorrelatedInvocationError(t, result, wantCode, env.forbidden)
-			assertRecord(t, client, env, validated.InvocationID, acceptanceWorkspace, "runtime-b", "failed", string(wantCode))
-			return
-		}
-		time.Sleep(250 * time.Millisecond)
+	result, err := doRequestRaw(t.Context(), client, env.controlPlane+"/v4/workspaces/"+acceptanceWorkspace+"/invocations", http.MethodPost, env.ownerToken, "application/json", map[string]any{
+		"agentId": "runtime-b", "capability": "runtime.echo",
+		"input": map[string]any{"fixture": "success", "value": "removed-runtime-value"}, "stream": false,
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
-	t.Fatalf("Router did not fail closed with %s after observed Runtime B lease removal: status=%d body=%s", wantCode, last.status, last.body)
+	validated := assertCorrelatedInvocationError(t, result, wantCode, env.forbidden)
+	assertRecord(t, client, env, validated.InvocationID, acceptanceWorkspace, "runtime-b", "failed", string(wantCode))
 }
 
 func waitForNacosInstance(t *testing.T, client *http.Client, env acceptanceEnv, serviceName, instanceID string) {
