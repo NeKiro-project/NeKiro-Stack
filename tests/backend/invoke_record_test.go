@@ -118,7 +118,7 @@ func TestInvokeToRecordAcceptance(t *testing.T) {
 		"policy-content-secret", "protocol-content-secret", "agent-content-secret",
 		"route-content-secret", "timeout-content-secret", "cancel-content-secret",
 		"interrupted-content-secret", "dependency-content-secret", "dependency-raw-secret",
-		"snapshot-refresh-value",
+		"snapshot-refresh-value", "removed-runtime-value",
 	}, env.credentialForbidden...)
 	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }, Timeout: 45 * time.Second}
 	if result := doRequest(t, client, env.controlPlane+"/readyz", http.MethodGet, "", "", nil); result.status != http.StatusNoContent {
@@ -138,6 +138,7 @@ func TestInvokeToRecordAcceptance(t *testing.T) {
 	registerAndPublish(t, client, &env, runtimeTimeout)
 	registerAndPublish(t, client, &env, runtimeInterrupted)
 	runtimeLifecycleRelease := registerAndPublish(t, client, &env, runtimeLifecycle)
+	startRegisteredRuntimes(t, env)
 	assertNacosRegistrations(t, client, env)
 	publishRouterNacosBindings(t, client, env)
 	assertPublicAgentInputMatrix(t, client, env, contracts.CatalogEntry{PublicAgentID: env.publicAgentIDs["runtime-a"], PublicURL: env.publicAgentOrigin + "/a/" + env.publicAgentIDs["runtime-a"]})
@@ -308,12 +309,26 @@ func assertNacosRegistrations(t *testing.T, client *http.Client, env acceptanceE
 	}
 }
 
+func startRegisteredRuntimes(t *testing.T, env acceptanceEnv) {
+	t.Helper()
+	command := composeCommand(
+		t.Context(), env,
+		"--profile", "runtime-registration", "up", "--detach", "--no-deps", "--force-recreate",
+		"--wait", "--wait-timeout", "60", "runtime-a-directory", "runtime-b-directory",
+	)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("start exact-Release runtime registrations: %v output=%s", err, output)
+	}
+}
+
 func replaceRuntimeBNacosInstance(t *testing.T, client *http.Client, env acceptanceEnv) {
 	t.Helper()
-	stop := composeCommand(t.Context(), env, "stop", "runtime-b-directory")
+	stop := composeCommand(t.Context(), env, "--profile", "runtime-registration", "stop", "runtime-b-directory")
 	if output, err := stop.CombinedOutput(); err != nil {
 		t.Fatalf("stop original Runtime B directory instance: %v output=%s", err, output)
 	}
+	waitForNacosInstanceRemoval(t, client, env, "runtime-b")
+	assertRemovedRuntimeRejected(t, client, env)
 
 	start := composeCommand(
 		t.Context(), env,
@@ -324,6 +339,58 @@ func replaceRuntimeBNacosInstance(t *testing.T, client *http.Client, env accepta
 		t.Fatalf("start replacement Runtime B directory instance: %v output=%s", err, output)
 	}
 	waitForNacosInstance(t, client, env, "runtime-b", "runtime-b-primary")
+}
+
+func waitForNacosInstanceRemoval(t *testing.T, client *http.Client, env acceptanceEnv, serviceName string) {
+	t.Helper()
+	endpoint, err := url.Parse(env.nacosURL + "/v1/ns/instance/list")
+	if err != nil {
+		t.Fatal(err)
+	}
+	query := endpoint.Query()
+	query.Set("serviceName", serviceName)
+	query.Set("groupName", "NEKIRO")
+	query.Set("clusters", "DEFAULT")
+	query.Set("namespaceId", "nekiro")
+	query.Set("healthyOnly", "false")
+	endpoint.RawQuery = query.Encode()
+	deadline := time.Now().Add(30 * time.Second)
+	var last httpResult
+	for time.Now().Before(deadline) {
+		last = doRequest(t, client, endpoint.String(), http.MethodGet, "", "", nil)
+		var response struct {
+			Hosts []json.RawMessage `json:"hosts"`
+		}
+		if last.status == http.StatusOK && json.Unmarshal(last.body, &response) == nil && len(response.Hosts) == 0 {
+			return
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	t.Fatalf("Nacos service %s retained an instance after lease close: status=%d body=%s", serviceName, last.status, last.body)
+}
+
+func assertRemovedRuntimeRejected(t *testing.T, client *http.Client, env acceptanceEnv) {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	var last httpResult
+	for time.Now().Before(deadline) {
+		result, err := doRequestRaw(t.Context(), client, env.controlPlane+"/v4/workspaces/"+acceptanceWorkspace+"/invocations", http.MethodPost, env.ownerToken, "application/json", map[string]any{
+			"agentId": "runtime-b", "capability": "runtime.echo",
+			"input": map[string]any{"fixture": "success", "value": "removed-runtime-value"}, "stream": false,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		last = result
+		var observation platformErrorObservation
+		if result.status != http.StatusOK && json.Unmarshal(result.body, &observation) == nil && observation.Code == contracts.ErrorCodeAgentUnavailable && observation.InvocationID != "" && observation.RootTaskID != "" {
+			validated := assertCorrelatedInvocationError(t, result, contracts.ErrorCodeAgentUnavailable, env.forbidden)
+			assertRecord(t, client, env, validated.InvocationID, acceptanceWorkspace, "runtime-b", "failed", string(contracts.ErrorCodeAgentUnavailable))
+			return
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	t.Fatalf("Router did not fail closed after Runtime B lease removal: status=%d body=%s", last.status, last.body)
 }
 
 func waitForNacosInstance(t *testing.T, client *http.Client, env acceptanceEnv, serviceName, instanceID string) {
@@ -423,7 +490,27 @@ func requiredEnv(t *testing.T, name string) string {
 
 func composeCommand(ctx context.Context, env acceptanceEnv, args ...string) *exec.Cmd {
 	base := []string{"compose", "--project-name", env.composeProject, "--file", env.composeFile}
-	return exec.CommandContext(ctx, "docker", append(base, args...)...)
+	command := exec.CommandContext(ctx, "docker", append(base, args...)...)
+	command.Env = append(os.Environ(), runtimeRegistrationEnvironment(env)...)
+	return command
+}
+
+func runtimeRegistrationEnvironment(env acceptanceEnv) []string {
+	values := make([]string, 0, 10)
+	for prefix, agentID := range map[string]string{"RUNTIME_A": "runtime-a", "RUNTIME_B": "runtime-b"} {
+		release, ok := env.releases[agentID]
+		if !ok {
+			continue
+		}
+		values = append(values,
+			prefix+"_AGENT_CARD_VERSION="+release.AgentCardVersion,
+			prefix+"_RELEASE_ID="+release.ReleaseID,
+			prefix+"_CARD_DIGEST="+release.CardDigest,
+			prefix+"_CANONICAL_ENDPOINT="+release.EndpointOrigin+release.EndpointPath,
+			prefix+"_AUDIENCE="+release.EndpointOrigin,
+		)
+	}
+	return values
 }
 
 func acceptanceCard(agentID, name, endpoint, capability string, permissions []string, streaming bool) []byte {
@@ -1911,7 +1998,7 @@ func assertStorageAndLogsAreMetadataOnly(t *testing.T, env acceptanceEnv) {
 		t.Fatal(err)
 	}
 	installationRows.Close()
-	logs := composeCommand(ctx, env, "--profile", "watch-refresh", "logs", "--no-color")
+	logs := composeCommand(ctx, env, "--profile", "runtime-registration", "--profile", "watch-refresh", "logs", "--no-color")
 	output, err := logs.Output()
 	if err != nil {
 		t.Fatal(err)

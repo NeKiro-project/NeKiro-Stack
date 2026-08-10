@@ -216,20 +216,30 @@ services:
       start_period: 5s
 
   runtime-b-directory:
+    profiles: ["runtime-registration"]
     image: "${NEKIRO_RUNTIME_B_IMAGE:?NEKIRO_RUNTIME_B_IMAGE must be set to the prepared immutable image}"
     environment:
       RUNTIME_B_LISTEN_ADDR: "0.0.0.0:8092"
       RUNTIME_B_AGENT_ID: "runtime-b"
       RUNTIME_B_INSTANCE_ID: "runtime-b-directory"
       RUNTIME_B_REGISTRATION_MODE: "nacos"
+      RUNTIME_B_AGENT_CARD_VERSION: "${RUNTIME_B_AGENT_CARD_VERSION:-}"
+      RUNTIME_B_RELEASE_ID: "${RUNTIME_B_RELEASE_ID:-}"
+      RUNTIME_B_CARD_DIGEST: "${RUNTIME_B_CARD_DIGEST:-}"
+      RUNTIME_B_CANONICAL_ENDPOINT: "${RUNTIME_B_CANONICAL_ENDPOINT:-}"
+      RUNTIME_B_AUDIENCE: "${RUNTIME_B_AUDIENCE:-}"
       RUNTIME_B_NACOS_API_ORIGIN: "http://nacos:8848/nacos"
       RUNTIME_B_NACOS_NAMESPACE_ID: "nekiro"
       RUNTIME_B_NACOS_GROUP_NAME: "NEKIRO"
       RUNTIME_B_NACOS_SERVICE_NAME: "runtime-b"
       RUNTIME_B_NACOS_CLUSTER_NAME: "DEFAULT"
+      RUNTIME_B_NACOS_PORT_NAME: "a2a"
       RUNTIME_B_NACOS_ADVERTISED_IP: "172.28.0.12"
       RUNTIME_B_NACOS_ADVERTISED_PORT: "8092"
+      RUNTIME_B_NACOS_WEIGHT: "1"
       RUNTIME_B_NACOS_HEARTBEAT_INTERVAL_MS: "2000"
+      RUNTIME_B_NACOS_HEARTBEAT_TIMEOUT_MS: "5000"
+      RUNTIME_B_NACOS_IP_DELETE_TIMEOUT_MS: "10000"
       RUNTIME_B_NACOS_REQUEST_TIMEOUT_MS: "3000"
       RUNTIME_B_NACOS_AUTH_MODE: "none"
       RUNTIME_B_ROUTER_URL: "http://a2a-router:8081"
@@ -264,14 +274,23 @@ services:
       RUNTIME_B_AGENT_ID: "runtime-b"
       RUNTIME_B_INSTANCE_ID: "runtime-b-primary"
       RUNTIME_B_REGISTRATION_MODE: "nacos"
+      RUNTIME_B_AGENT_CARD_VERSION: "${RUNTIME_B_AGENT_CARD_VERSION:-}"
+      RUNTIME_B_RELEASE_ID: "${RUNTIME_B_RELEASE_ID:-}"
+      RUNTIME_B_CARD_DIGEST: "${RUNTIME_B_CARD_DIGEST:-}"
+      RUNTIME_B_CANONICAL_ENDPOINT: "${RUNTIME_B_CANONICAL_ENDPOINT:-}"
+      RUNTIME_B_AUDIENCE: "${RUNTIME_B_AUDIENCE:-}"
       RUNTIME_B_NACOS_API_ORIGIN: "http://nacos:8848/nacos"
       RUNTIME_B_NACOS_NAMESPACE_ID: "nekiro"
       RUNTIME_B_NACOS_GROUP_NAME: "NEKIRO"
       RUNTIME_B_NACOS_SERVICE_NAME: "runtime-b"
       RUNTIME_B_NACOS_CLUSTER_NAME: "DEFAULT"
+      RUNTIME_B_NACOS_PORT_NAME: "a2a"
       RUNTIME_B_NACOS_ADVERTISED_IP: "172.28.0.13"
       RUNTIME_B_NACOS_ADVERTISED_PORT: "8092"
+      RUNTIME_B_NACOS_WEIGHT: "1"
       RUNTIME_B_NACOS_HEARTBEAT_INTERVAL_MS: "2000"
+      RUNTIME_B_NACOS_HEARTBEAT_TIMEOUT_MS: "5000"
+      RUNTIME_B_NACOS_IP_DELETE_TIMEOUT_MS: "10000"
       RUNTIME_B_NACOS_REQUEST_TIMEOUT_MS: "3000"
       RUNTIME_B_NACOS_AUTH_MODE: "none"
       RUNTIME_B_ROUTER_URL: "http://a2a-router:8081"
@@ -304,15 +323,58 @@ services:
       RUNTIME_A_LISTEN_ADDR: "0.0.0.0:8091"
       RUNTIME_A_AGENT_ID: "runtime-a"
       RUNTIME_A_INSTANCE_ID: "runtime-a-primary"
+      RUNTIME_A_REGISTRATION_MODE: "disabled"
+      RUNTIME_A_ROUTER_URL: "http://a2a-router:8081"
+      RUNTIME_A_ROUTER_TOKEN: "${RUNTIME_A_ROUTER_TOKEN:?RUNTIME_A_ROUTER_TOKEN must be set and non-empty}"
+      RUNTIME_A_TARGET_AGENT_ID: "runtime-b"
+      RUNTIME_A_TARGET_CAPABILITY: "runtime.echo"
+      RUNTIME_A_RESPONSE_LIMIT_BYTES: "${RUNTIME_A_RESPONSE_LIMIT_BYTES:?RUNTIME_A_RESPONSE_LIMIT_BYTES must be set and non-empty}"
+      RUNTIME_A_EVENT_LIMIT_BYTES: "${RUNTIME_A_EVENT_LIMIT_BYTES:?RUNTIME_A_EVENT_LIMIT_BYTES must be set and non-empty}"
+      NEKIRO_AGENT_CHALLENGE_DIRECTORY: "/tmp/nekiro-challenges"
+      NEKIRO_AGENT_ROUTER_ISSUER: "${NEKIRO_AGENT_ROUTER_ISSUER:?NEKIRO_AGENT_ROUTER_ISSUER must be set and non-empty}"
+      NEKIRO_AGENT_ROUTER_AUDIENCE: "http://runtime-a:8091"
+      NEKIRO_AGENT_ROUTER_KEY_ID: "${NEKIRO_AGENT_ROUTER_KEY_ID:?NEKIRO_AGENT_ROUTER_KEY_ID must be set and non-empty}"
+      NEKIRO_AGENT_ROUTER_PUBLIC_KEY_BASE64URL: "${NEKIRO_AGENT_ROUTER_PUBLIC_KEY_BASE64URL:?NEKIRO_AGENT_ROUTER_PUBLIC_KEY_BASE64URL must be set and non-empty}"
+    depends_on:
+      a2a-router:
+        condition: service_healthy
+      runtime-b:
+        condition: service_healthy
+    networks:
+      platform-internal:
+        ipv4_address: 172.28.0.11
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8091/readyz"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+
+  runtime-a-directory:
+    profiles: ["runtime-registration"]
+    image: "${NEKIRO_RUNTIME_A_IMAGE:?NEKIRO_RUNTIME_A_IMAGE must be set to the prepared immutable image}"
+    environment:
+      RUNTIME_A_LISTEN_ADDR: "0.0.0.0:8091"
+      RUNTIME_A_AGENT_ID: "runtime-a"
+      RUNTIME_A_INSTANCE_ID: "runtime-a-primary"
       RUNTIME_A_REGISTRATION_MODE: "nacos"
+      RUNTIME_A_AGENT_CARD_VERSION: "${RUNTIME_A_AGENT_CARD_VERSION:-}"
+      RUNTIME_A_RELEASE_ID: "${RUNTIME_A_RELEASE_ID:-}"
+      RUNTIME_A_CARD_DIGEST: "${RUNTIME_A_CARD_DIGEST:-}"
+      RUNTIME_A_CANONICAL_ENDPOINT: "${RUNTIME_A_CANONICAL_ENDPOINT:-}"
+      RUNTIME_A_AUDIENCE: "${RUNTIME_A_AUDIENCE:-}"
       RUNTIME_A_NACOS_API_ORIGIN: "http://nacos:8848/nacos"
       RUNTIME_A_NACOS_NAMESPACE_ID: "nekiro"
       RUNTIME_A_NACOS_GROUP_NAME: "NEKIRO"
       RUNTIME_A_NACOS_SERVICE_NAME: "runtime-a"
       RUNTIME_A_NACOS_CLUSTER_NAME: "DEFAULT"
-      RUNTIME_A_NACOS_ADVERTISED_IP: "172.28.0.11"
+      RUNTIME_A_NACOS_PORT_NAME: "a2a"
+      RUNTIME_A_NACOS_ADVERTISED_IP: "172.28.0.14"
       RUNTIME_A_NACOS_ADVERTISED_PORT: "8091"
+      RUNTIME_A_NACOS_WEIGHT: "1"
       RUNTIME_A_NACOS_HEARTBEAT_INTERVAL_MS: "2000"
+      RUNTIME_A_NACOS_HEARTBEAT_TIMEOUT_MS: "5000"
+      RUNTIME_A_NACOS_IP_DELETE_TIMEOUT_MS: "10000"
       RUNTIME_A_NACOS_REQUEST_TIMEOUT_MS: "3000"
       RUNTIME_A_NACOS_AUTH_MODE: "none"
       RUNTIME_A_ROUTER_URL: "http://a2a-router:8081"
@@ -333,7 +395,7 @@ services:
         condition: service_healthy
     networks:
       platform-internal:
-        ipv4_address: 172.28.0.11
+        ipv4_address: 172.28.0.14
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8091/readyz"]
       interval: 5s

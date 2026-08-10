@@ -76,7 +76,7 @@ explicitly because instance-directory behavior is outside those checks.
 |---|---|---|
 | Manifest | `go run ./cmd/manifest-validator components.json` | All five component owners and immutable revisions validate |
 | Compose | `docker compose --file compose.yaml config --quiet` | Configuration exits `0` with no `build:` or floating image |
-| Backend acceptance | `go test -tags=e2e -count=1 ./tests/backend` | Register → publish → discover → install → invoke → record passes, including cross-runtime lineage |
+| Backend acceptance | `go test -tags=e2e -count=1 ./tests/backend` | Provider registration lease → Nacos watch discovery → install → Router-only invoke → Ledger record passes, including cross-runtime lineage, explicit deregistration, fail-closed removal, and replacement recovery |
 | Browser acceptance | Console `pnpm test:e2e` in Stack CI | Every production Console scenario passes through the live Gateway |
 
 A healthy container set alone is not acceptance. Backend success requires the
