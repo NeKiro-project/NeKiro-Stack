@@ -118,6 +118,7 @@ func TestInvokeToRecordAcceptance(t *testing.T) {
 		"policy-content-secret", "protocol-content-secret", "agent-content-secret",
 		"route-content-secret", "timeout-content-secret", "cancel-content-secret",
 		"interrupted-content-secret", "dependency-content-secret", "dependency-raw-secret",
+		"snapshot-refresh-value",
 	}, env.credentialForbidden...)
 	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }, Timeout: 45 * time.Second}
 	if result := doRequest(t, client, env.controlPlane+"/readyz", http.MethodGet, "", "", nil); result.status != http.StatusNoContent {
@@ -180,6 +181,15 @@ func TestInvokeToRecordAcceptance(t *testing.T) {
 		}
 	}
 	assertRecord(t, client, env, stream[0].InvocationID, acceptanceWorkspace, "runtime-b", "succeeded", "")
+
+	replaceRuntimeBNacosInstance(t, client, env)
+	runtimeBReplacementResult := invokeJSON(t, client, env, "runtime-b", "runtime.echo", map[string]any{"fixture": "success", "value": "snapshot-refresh-value"})
+	if runtimeBReplacementResult.result.Status != "succeeded" ||
+		!bytes.Contains(runtimeBReplacementResult.result.Result, []byte("snapshot-refresh-value")) ||
+		!bytes.Contains(runtimeBReplacementResult.result.Result, []byte(`"instanceId":"runtime-b-primary"`)) {
+		t.Fatalf("Runtime B replacement JSON result=%s", runtimeBReplacementResult.result.Result)
+	}
+	assertRecord(t, client, env, runtimeBReplacementResult.result.InvocationID, acceptanceWorkspace, "runtime-b", "succeeded", "")
 
 	nested := invokeJSON(t, client, env, "runtime-a", "runtime.cross", map[string]any{"fixture": "success", "value": "nested-value"})
 	if nested.result.Status != "succeeded" || !bytes.Contains(nested.result.Result, []byte(`"runtime-a"`)) || !bytes.Contains(nested.result.Result, []byte(`"childInvocationId"`)) {
@@ -296,6 +306,61 @@ func assertNacosRegistrations(t *testing.T, client *http.Client, env acceptanceE
 			t.Fatalf("Nacos registration %s status=%d body=%s", service, result.status, result.body)
 		}
 	}
+}
+
+func replaceRuntimeBNacosInstance(t *testing.T, client *http.Client, env acceptanceEnv) {
+	t.Helper()
+	stop := composeCommand(t.Context(), env, "stop", "runtime-b-directory")
+	if output, err := stop.CombinedOutput(); err != nil {
+		t.Fatalf("stop original Runtime B directory instance: %v output=%s", err, output)
+	}
+
+	start := composeCommand(
+		t.Context(), env,
+		"--profile", "watch-refresh", "up", "--detach", "--no-deps", "--force-recreate",
+		"--wait", "--wait-timeout", "60", "runtime-b-watch-replacement",
+	)
+	if output, err := start.CombinedOutput(); err != nil {
+		t.Fatalf("start replacement Runtime B directory instance: %v output=%s", err, output)
+	}
+	waitForNacosInstance(t, client, env, "runtime-b", "runtime-b-primary")
+}
+
+func waitForNacosInstance(t *testing.T, client *http.Client, env acceptanceEnv, serviceName, instanceID string) {
+	t.Helper()
+	endpoint, err := url.Parse(env.nacosURL + "/v1/ns/instance/list")
+	if err != nil {
+		t.Fatal(err)
+	}
+	query := endpoint.Query()
+	query.Set("serviceName", serviceName)
+	query.Set("groupName", "NEKIRO")
+	query.Set("clusters", "DEFAULT")
+	query.Set("namespaceId", "nekiro")
+	query.Set("healthyOnly", "false")
+	endpoint.RawQuery = query.Encode()
+
+	deadline := time.Now().Add(30 * time.Second)
+	var last httpResult
+	for time.Now().Before(deadline) {
+		last = doRequest(t, client, endpoint.String(), http.MethodGet, "", "", nil)
+		var response struct {
+			Hosts []struct {
+				Healthy   bool              `json:"healthy"`
+				Enabled   bool              `json:"enabled"`
+				Ephemeral bool              `json:"ephemeral"`
+				Metadata  map[string]string `json:"metadata"`
+			} `json:"hosts"`
+		}
+		if last.status == http.StatusOK && json.Unmarshal(last.body, &response) == nil && len(response.Hosts) == 1 {
+			host := response.Hosts[0]
+			if host.Healthy && host.Enabled && host.Ephemeral && host.Metadata["nekiro.instanceId"] == instanceID {
+				return
+			}
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	t.Fatalf("Nacos service %s did not converge to instance %s: status=%d body=%s", serviceName, instanceID, last.status, last.body)
 }
 
 func publishRouterNacosBindings(t *testing.T, client *http.Client, env acceptanceEnv) {
@@ -1846,7 +1911,7 @@ func assertStorageAndLogsAreMetadataOnly(t *testing.T, env acceptanceEnv) {
 		t.Fatal(err)
 	}
 	installationRows.Close()
-	logs := composeCommand(ctx, env, "logs", "--no-color")
+	logs := composeCommand(ctx, env, "--profile", "watch-refresh", "logs", "--no-color")
 	output, err := logs.Output()
 	if err != nil {
 		t.Fatal(err)
