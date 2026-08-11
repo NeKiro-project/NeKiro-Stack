@@ -16,7 +16,7 @@
     },
     "samples": {
       "repository": "NeKiro-project/NeKiro-Samples",
-      "commitSha": "1a37b6a3a3d2ee89cec1bae452bac0fac96b30ce"
+      "commitSha": "80bf8e18531ad594f34996f573fbdd81aa5496f9"
     },
     "transportGo": {
       "repository": "NeKiro-project/nekiro-a2a-transport-go",
