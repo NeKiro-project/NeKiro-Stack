@@ -1,7 +1,7 @@
 github.com/Masterminds/semver/v3 v3.5.0 h1:kQceYJfbupGfZOKZQg0kou0DgAKhzDg2NZPAwZ/2OOE=
 github.com/Masterminds/semver/v3 v3.5.0/go.mod h1:4V+yj/TJE1HU9XfppCwVMZq3I84lprf4nC11bSS5beM=
-github.com/NeKiro-project/NeKiro v0.0.0-20260810110658-8c385babc9da h1:jZSoKwcJe8m7dHg5OlJ06R4zf6Rm+OeYWuF2DHpZ5Yc=
-github.com/NeKiro-project/NeKiro v0.0.0-20260810110658-8c385babc9da/go.mod h1:JCIEeiLu52WC/Q5QlcAKmWKRtW7CNLkZ3lV3BAn92Oo=
+github.com/NeKiro-project/NeKiro v0.0.0-20260811175413-b588c754e369 h1:eL4X7jgfAOHB9zqocNmpOfLvqUk1JWrJ2HdAbiGH4HQ=
+github.com/NeKiro-project/NeKiro v0.0.0-20260811175413-b588c754e369/go.mod h1:JCIEeiLu52WC/Q5QlcAKmWKRtW7CNLkZ3lV3BAn92Oo=
 github.com/a2aproject/a2a-go v0.3.15 h1:h5YpCiPq3jxQ5rIns7oDjPag3ivP8u817AzdA4F+NiI=
 github.com/a2aproject/a2a-go v0.3.15/go.mod h1:I7Cm+a1oL+UT6zMoP+roaRE5vdfUa1iQGVN8aSOuZ0I=
 github.com/creack/pty v1.1.9/go.mod h1:oKZEueFk5CKHvIhNR5MUki03XCEU+Q6VDXinZuGJ33E=

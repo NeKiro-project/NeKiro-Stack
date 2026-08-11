@@ -1,10 +1,10 @@
 {
   "schemaVersion": "1",
-  "contractIdentity": "NeKiro/contracts@8c385babc9da4c383a0aaa9efe1daeb0b72dd812",
+  "contractIdentity": "NeKiro/contracts@b588c754e369c6ae09dd415870d7ce111858af12",
   "components": {
     "core": {
       "repository": "NeKiro-project/NeKiro",
-      "commitSha": "8c385babc9da4c383a0aaa9efe1daeb0b72dd812"
+      "commitSha": "b588c754e369c6ae09dd415870d7ce111858af12"
     },
     "console": {
       "repository": "NeKiro-project/NeKiro-Console",
@@ -12,11 +12,11 @@
     },
     "sdkGo": {
       "repository": "NeKiro-project/nekiro-sdk-go",
-      "commitSha": "39c37c8929b5f2b811342b3784abc72da3d59d8f"
+      "commitSha": "48d495894a5e22fa3c7ceee483e8a62025e5bcfa"
     },
     "samples": {
       "repository": "NeKiro-project/NeKiro-Samples",
-      "commitSha": "1dcfae990564febdb545c4d02408f3f2991aa5a0"
+      "commitSha": "1a37b6a3a3d2ee89cec1bae452bac0fac96b30ce"
     },
     "transportGo": {
       "repository": "NeKiro-project/nekiro-a2a-transport-go",
