@@ -1,0 +1,23 @@
+services:
+  console:
+    image: "${NEKIRO_CONSOLE_IMAGE:?NEKIRO_CONSOLE_IMAGE must be an immutable released image}"
+    environment:
+      NEKIRO_CONSOLE_LISTEN_ADDRESS: "${NEKIRO_CONSOLE_LISTEN_ADDRESS:?NEKIRO_CONSOLE_LISTEN_ADDRESS must be set}"
+      VITE_NEKIRO_API_BASE_URL: "${VITE_NEKIRO_API_BASE_URL:?VITE_NEKIRO_API_BASE_URL must be set}"
+      VITE_NEKIRO_PROVIDER_ID: "${VITE_NEKIRO_PROVIDER_ID:?VITE_NEKIRO_PROVIDER_ID must be set}"
+      VITE_NEKIRO_PROVIDER_NAME: "${VITE_NEKIRO_PROVIDER_NAME:?VITE_NEKIRO_PROVIDER_NAME must be set}"
+      VITE_NEKIRO_PROVIDER_TOKEN: "${VITE_NEKIRO_PROVIDER_TOKEN:?VITE_NEKIRO_PROVIDER_TOKEN must be set}"
+      VITE_NEKIRO_OWNER_TOKEN: "${VITE_NEKIRO_OWNER_TOKEN:?VITE_NEKIRO_OWNER_TOKEN must be set}"
+      VITE_NEKIRO_DEFAULT_WORKSPACE_ID: "${VITE_NEKIRO_DEFAULT_WORKSPACE_ID:?VITE_NEKIRO_DEFAULT_WORKSPACE_ID must be set}"
+      VITE_NEKIRO_PUBLIC_AGENT_ORIGIN: "${VITE_NEKIRO_PUBLIC_AGENT_ORIGIN:?VITE_NEKIRO_PUBLIC_AGENT_ORIGIN must be set}"
+    depends_on:
+      control-plane:
+        condition: service_healthy
+    networks:
+      - local-access
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/readyz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s

@@ -1,0 +1,149 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 100
+    steps:
+      - name: Check out the tagged Stack revision
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Verify release identity and source
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          test "$(git cat-file -t "$RELEASE_TAG")" = tag
+          test "$(git rev-list -n 1 "$RELEASE_TAG")" = "$GITHUB_SHA"
+          go run ./cmd/manifest-validator components.json
+          go test ./...
+          go vet ./...
+
+      - name: Download component release evidence
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          mkdir -p evidence/core evidence/console evidence/sdk evidence/samples
+          gh release download "$RELEASE_TAG" --repo NeKiro-project/NeKiro --pattern images.json --dir evidence/core
+          gh release download "$RELEASE_TAG" --repo NeKiro-project/NeKiro-Console --pattern images.json --dir evidence/console
+          gh release download "$RELEASE_TAG" --repo NeKiro-project/nekiro-sdk-go --pattern release.json --dir evidence/sdk
+          gh release download "$RELEASE_TAG" --repo NeKiro-project/NeKiro-Samples --pattern images.json --dir evidence/samples
+
+      - name: Validate exact compatibility matrix
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          test "$(jq -r .commitSha evidence/core/images.json)" = "$(jq -r .components.core.commitSha components.json)"
+          test "$(jq -r .commitSha evidence/console/images.json)" = "$(jq -r .components.console.commitSha components.json)"
+          test "$(jq -r .commitSha evidence/sdk/release.json)" = "$(jq -r .components.sdkGo.commitSha components.json)"
+          test "$(jq -r .commitSha evidence/samples/images.json)" = "$(jq -r .components.samples.commitSha components.json)"
+          for file in evidence/core/images.json evidence/console/images.json evidence/sdk/release.json evidence/samples/images.json; do
+            test "$(jq -r .tag "$file")" = "$RELEASE_TAG"
+          done
+          test "$(jq -r .platformApiVersion evidence/core/images.json)" = v1
+          test "$(jq -r .platformApiVersion evidence/console/images.json)" = v1
+          test "$(jq -r .platformApiVersion evidence/sdk/release.json)" = 1
+
+      - name: Resolve immutable component image references
+        shell: bash
+        run: |
+          echo "CONTROL_IMAGE=$(jq -r '.images.controlPlane.reference + "@" + .images.controlPlane.digest' evidence/core/images.json)" >> "$GITHUB_ENV"
+          echo "ROUTER_IMAGE=$(jq -r '.images.a2aRouter.reference + "@" + .images.a2aRouter.digest' evidence/core/images.json)" >> "$GITHUB_ENV"
+          echo "CONSOLE_IMAGE=$(jq -r '.images.console.reference + "@" + .images.console.digest' evidence/console/images.json)" >> "$GITHUB_ENV"
+          echo "RUNTIME_A_IMAGE=$(jq -r '.images.runtimeA.reference + "@" + .images.runtimeA.digest' evidence/samples/images.json)" >> "$GITHUB_ENV"
+          echo "RUNTIME_B_IMAGE=$(jq -r '.images.runtimeB.reference + "@" + .images.runtimeB.digest' evidence/samples/images.json)" >> "$GITHUB_ENV"
+
+      - name: Authenticate to GHCR
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: echo "$GH_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Publish Stack-owned fixture image
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          docker buildx create --use
+          fixture_image="ghcr.io/nekiro-project/nekiro-nacos-secure-fixture:$RELEASE_TAG"
+          docker buildx build \
+            --file tests/fixtures/nacos-secure-fixture.Dockerfile \
+            --platform linux/amd64,linux/arm64 \
+            --provenance=mode=max --sbom=true \
+            --metadata-file fixture-metadata.json \
+            --tag "$fixture_image" --push .
+          fixture_digest=$(jq -r '.["containerimage.digest"]' fixture-metadata.json)
+          [[ "$fixture_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          echo "FIXTURE_IMAGE=$fixture_image@$fixture_digest" >> "$GITHUB_ENV"
+
+      - name: Publish digest-pinned evaluator image
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          evaluator_image="ghcr.io/nekiro-project/nekiro-evaluation:$RELEASE_TAG"
+          docker buildx build \
+            --file tests/fixtures/evaluation.Dockerfile \
+            --platform linux/amd64,linux/arm64 \
+            --provenance=mode=max --sbom=true \
+            --build-arg "NEKIRO_CONTROL_PLANE_IMAGE=$CONTROL_IMAGE" \
+            --build-arg "NEKIRO_A2A_ROUTER_IMAGE=$ROUTER_IMAGE" \
+            --build-arg "NEKIRO_CONSOLE_IMAGE=$CONSOLE_IMAGE" \
+            --build-arg "NEKIRO_RUNTIME_A_IMAGE=$RUNTIME_A_IMAGE" \
+            --build-arg "NEKIRO_RUNTIME_B_IMAGE=$RUNTIME_B_IMAGE" \
+            --build-arg "NEKIRO_NACOS_SECURE_PROXY_IMAGE=$FIXTURE_IMAGE" \
+            --metadata-file evaluator-metadata.json \
+            --tag "$evaluator_image" --push .
+          evaluator_digest=$(jq -r '.["containerimage.digest"]' evaluator-metadata.json)
+          [[ "$evaluator_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          echo "EVALUATOR_IMAGE=$evaluator_image@$evaluator_digest" >> "$GITHUB_ENV"
+
+      - name: Prove the published one-command evaluation
+        run: docker run --rm --privileged "$EVALUATOR_IMAGE"
+
+      - name: Write release manifest and exact command
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          printf 'docker run --rm --privileged %s\n' "$EVALUATOR_IMAGE" > evaluation-command.txt
+          jq -n \
+            --arg tag "$RELEASE_TAG" --arg commit "$GITHUB_SHA" \
+            --arg coreCommit "$(jq -r .components.core.commitSha components.json)" \
+            --arg consoleCommit "$(jq -r .components.console.commitSha components.json)" \
+            --arg sdkCommit "$(jq -r .components.sdkGo.commitSha components.json)" \
+            --arg samplesCommit "$(jq -r .components.samples.commitSha components.json)" \
+            --arg transportTag "$(jq -r .components.transportGo.tag components.json)" \
+            --arg transportCommit "$(jq -r .components.transportGo.commitSha components.json)" \
+            --arg controlImage "$CONTROL_IMAGE" --arg routerImage "$ROUTER_IMAGE" --arg consoleImage "$CONSOLE_IMAGE" \
+            --arg runtimeAImage "$RUNTIME_A_IMAGE" --arg runtimeBImage "$RUNTIME_B_IMAGE" --arg fixtureImage "$FIXTURE_IMAGE" --arg evaluatorImage "$EVALUATOR_IMAGE" \
+            '{schemaVersion:"1",tag:$tag,commitSha:$commit,platformApiVersion:"v1",support:{host:"Docker Linux container backend",architectures:["linux/amd64","linux/arm64"],profile:"evaluation",supported:["Register-Discover-Install-Invoke-Record","Gateway-only Console","exact Release routing","cross-Agent lineage"],experimental:["Docker-only evaluation profile"],deferred:["production deployment profile","Kubernetes packaging","Windows containers"]},components:{core:{tag:$tag,commitSha:$coreCommit,images:{controlPlane:$controlImage,a2aRouter:$routerImage}},console:{tag:$tag,commitSha:$consoleCommit,image:$consoleImage},sdkGo:{tag:$tag,commitSha:$sdkCommit},samples:{tag:$tag,commitSha:$samplesCommit,images:{runtimeA:$runtimeAImage,runtimeB:$runtimeBImage}},transportGo:{tag:$transportTag,commitSha:$transportCommit},stack:{tag:$tag,images:{nacosFixture:$fixtureImage,evaluator:$evaluatorImage}}}}' > release-manifest.json
+          sha256sum release-manifest.json evaluation-command.txt > checksums.txt
+
+      - name: Publish GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: gh release create "$RELEASE_TAG" release-manifest.json evaluation-command.txt checksums.txt --verify-tag --generate-notes --title "NeKiro Stack $RELEASE_TAG"

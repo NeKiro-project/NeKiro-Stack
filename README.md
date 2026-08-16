@@ -6,6 +6,34 @@ component manifest, Compose wiring, backend acceptance, production browser
 acceptance, and sanitized product logs. It does not own or copy component
 production source.
 
+The v0.1 product boundary exposes one Platform API namespace: `/v1`. Stack
+acceptance asserts that representative `/v2`, `/v3`, and `/v4` routes return
+404; no component probes or falls back to them. Independently versioned event,
+error, Agent Card, and A2A payload schemas keep their own schema versions.
+
+## Docker-only evaluation
+
+Each Stack GitHub Release contains `evaluation-command.txt`. Copying that one
+`docker run` command starts an isolated Docker-in-Docker evaluator, pulls only
+the release's tag-and-digest-pinned images, generates fresh credentials and
+PKI, and runs the complete lifecycle:
+
+```text
+Register -> Discover -> Install -> Invoke -> Record
+```
+
+The readable PASS summary includes `root_task_id`,
+`parent_invocation_id`, `trace_id`, and the observed
+`CAPABILITY_NOT_ALLOWED` failure. The evaluator starts Core, Console, two
+different Agent runtimes, PostgreSQL, and secured Nacos, then removes its
+nested containers, volumes, generated credentials, and PKI. Only Docker is
+required on the host; Git, Go, Node, and repository checkouts are not.
+
+The command uses `--privileged` only for a private daemon inside the disposable
+evaluator container. It never mounts the host Docker socket. This is an
+explicit `evaluation` profile, not a production deployment or configuration
+fallback.
+
 ## Components
 
 `components.json` records exact full commits for core, Console, Go SDK,
@@ -133,6 +161,24 @@ Pull requests must list every component revision changed, why the revisions
 are mutually compatible, which backend/browser checks ran, and the observed
 success signals. A green manifest-only check is not evidence that the product
 loop passed.
+
+## Releases
+
+An annotated Stack semantic tag is accepted only after the same tag's Core,
+Console, SDK, and Samples release evidence matches every exact commit in
+`components.json`. The release workflow builds the Stack-owned secure-Nacos
+fixture and evaluator images with OCI provenance and SBOM attestations, runs
+the published evaluator by immutable digest, and attaches:
+
+- `release-manifest.json`: supported component tags, commits, image digests,
+  Platform API `/v1`, and host requirements;
+- `evaluation-command.txt`: the exact one-command evaluation entrypoint;
+- `checksums.txt`: checksums for both artifacts.
+
+The first release is supported on Docker's Linux container backend for
+`linux/amd64` and `linux/arm64`. Native Kubernetes packaging, Windows
+containers, and production hardening remain deferred rather than silently
+falling back to alternate components.
 
 ## Provenance
 
