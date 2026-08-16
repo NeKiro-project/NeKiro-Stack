@@ -8,7 +8,7 @@
     },
     "console": {
       "repository": "NeKiro-project/NeKiro-Console",
-      "commitSha": "46deaa30bab5559b6305c046a1c63a52f088a748"
+      "commitSha": "8c063dbbad42d647105e121a86649d7503eefd3f"
     },
     "sdkGo": {
       "repository": "NeKiro-project/nekiro-sdk-go",
