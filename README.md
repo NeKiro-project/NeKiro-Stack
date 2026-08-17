@@ -29,10 +29,13 @@ different Agent runtimes, PostgreSQL, and secured Nacos, then removes its
 nested containers, volumes, generated credentials, and PKI. Only Docker is
 required on the host; Git, Go, Node, and repository checkouts are not.
 
-The command uses `--privileged` only for a private daemon inside the disposable
-evaluator container. It never mounts the host Docker socket. This is an
-explicit `evaluation` profile, not a production deployment or configuration
-fallback.
+The command expects `GHCR_USERNAME` and a short-lived `GHCR_TOKEN` with read
+access to the released GHCR images. It passes those variables to the isolated
+inner daemon, logs in only for the evaluation, and never includes the token in
+the release artifact. The command uses `--privileged` only for a private daemon
+inside the disposable evaluator container. It never mounts the host Docker
+socket. This is an explicit `evaluation` profile, not a production deployment
+or configuration fallback.
 
 ## Components
 

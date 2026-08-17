@@ -124,14 +124,17 @@ jobs:
           echo "EVALUATOR_IMAGE=$evaluator_image@$evaluator_digest" >> "$GITHUB_ENV"
 
       - name: Prove the published one-command evaluation
-        run: docker run --rm --privileged "$EVALUATOR_IMAGE"
+        env:
+          GHCR_USERNAME: ${{ github.actor }}
+          GHCR_TOKEN: ${{ github.token }}
+        run: docker run --rm --privileged --env GHCR_USERNAME --env GHCR_TOKEN "$EVALUATOR_IMAGE"
 
       - name: Write release manifest and exact command
         shell: bash
         env:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
-          printf 'docker run --rm --privileged %s\n' "$EVALUATOR_IMAGE" > evaluation-command.txt
+          printf 'docker run --rm --privileged --env GHCR_USERNAME --env GHCR_TOKEN %s\n' "$EVALUATOR_IMAGE" > evaluation-command.txt
           jq -n \
             --arg tag "$RELEASE_TAG" --arg commit "$GITHUB_SHA" \
             --arg coreCommit "$(jq -r .components.core.commitSha components.json)" \
