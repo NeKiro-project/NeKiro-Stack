@@ -129,6 +129,7 @@ RUNTIME_A_ROUTER_TOKEN=root-console-runtime-a-token
 RUNTIME_B_ROUTER_TOKEN=root-console-runtime-b-token
 NEKIRO_E2E_BASE_URL=http://127.0.0.1:4173
 NEKIRO_E2E_GATEWAY_PROXY_TARGET=http://127.0.0.1:18080
+NEKIRO_CONSOLE_LISTEN_ADDRESS=127.0.0.1:4173
 VITE_NEKIRO_API_BASE_URL=http://gateway.nekiro.test:18080
 VITE_NEKIRO_PROVIDER_ID=root-console-provider
 VITE_NEKIRO_PROVIDER_NAME=Root Console Provider
@@ -163,8 +164,18 @@ NEKIRO_CONTROL_PLANE_IMAGE=nekiro-control-plane:compose-check
 NEKIRO_A2A_ROUTER_IMAGE=nekiro-a2a-router:compose-check
 NEKIRO_RUNTIME_A_IMAGE=nekiro-runtime-a:compose-check
 NEKIRO_RUNTIME_B_IMAGE=nekiro-runtime-b:compose-check
+NEKIRO_CONSOLE_IMAGE=nekiro-console:compose-check
 NEKIRO_NACOS_SECURE_PROXY_IMAGE=nekiro-nacos-secure-fixture:compose-check
 NEKIRO_ROUTER_INSTANCE_ROUTING_MODE=direct
+NEKIRO_CONSOLE_LISTEN_ADDRESS=0.0.0.0:8080
+NEKIRO_CONSOLE_PORT=13000
+VITE_NEKIRO_API_BASE_URL=http://127.0.0.1:18080
+VITE_NEKIRO_PROVIDER_ID=compose-check
+VITE_NEKIRO_PROVIDER_NAME=Compose Check
+VITE_NEKIRO_PROVIDER_TOKEN=compose-check-provider
+VITE_NEKIRO_OWNER_TOKEN=compose-check-owner
+VITE_NEKIRO_DEFAULT_WORKSPACE_ID=workspace-acceptance
+VITE_NEKIRO_PUBLIC_AGENT_ORIGIN=https://agents.nekiro.test
 EOF
     ;;
   *)

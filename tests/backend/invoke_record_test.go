@@ -52,6 +52,7 @@ type acceptanceEnv struct {
 	databaseURL         string
 	composeFile         string
 	composeOverride     string
+	composeExtra        string
 	composeProject      string
 	challengeTTL        time.Duration
 	credentialIssuer    string
@@ -132,6 +133,11 @@ func TestInvokeToRecordAcceptance(t *testing.T) {
 	if result := doRequest(t, client, env.controlPlane+"/readyz", http.MethodGet, "", "", nil); result.status != http.StatusNoContent {
 		t.Fatalf("Control Plane readiness status=%d body=%s", result.status, result.body)
 	}
+	for _, retiredPath := range []string{"/v2/agents", "/v3/agents", "/v4/agents"} {
+		if result := doRequest(t, client, env.controlPlane+retiredPath, http.MethodGet, env.userToken, "", nil); result.status != http.StatusNotFound {
+			t.Fatalf("retired Platform API route %s status=%d body=%s", retiredPath, result.status, result.body)
+		}
+	}
 	runtimeA := acceptanceCardWithCapabilities("runtime-a", "Runtime A", "http://runtime-a:8091", []string{"runtime.cross", "runtime.echo"}, nil, false)
 	runtimeB := acceptanceCard("runtime-b", "Runtime B", "http://runtime-b:8092", "runtime.echo", []string{"text.read"}, true)
 	runtimeProtocol := acceptanceCard("runtime-protocol", "Runtime Protocol Fixture", "http://runtime-b:8092", "runtime.protocol", nil, false)
@@ -152,7 +158,7 @@ func TestInvokeToRecordAcceptance(t *testing.T) {
 	assertPublicAgentInputMatrix(t, client, env, contracts.CatalogEntry{PublicAgentID: env.publicAgentIDs["runtime-a"], PublicURL: env.publicAgentOrigin + "/a/" + env.publicAgentIDs["runtime-a"]})
 	assertVerificationFailureMatrix(t, client, &env)
 
-	discovery := doRequest(t, client, env.controlPlane+"/v3/agents?capability=runtime.echo", http.MethodGet, env.userToken, "", nil)
+	discovery := doRequest(t, client, env.controlPlane+"/v1/agents?capability=runtime.echo", http.MethodGet, env.userToken, "", nil)
 	if discovery.status != http.StatusOK || !bytes.Contains(discovery.body, []byte(`"agentId":"runtime-b"`)) {
 		t.Fatalf("discovery status=%d body=%s", discovery.status, discovery.body)
 	}
@@ -241,12 +247,12 @@ func TestInvokeToRecordAcceptance(t *testing.T) {
 
 	otherWorkspace := "workspace-other"
 	createWorkspace(t, client, env, otherWorkspace, env.otherToken)
-	isolation := doRequest(t, client, env.controlPlane+fmt.Sprintf("/v4/workspaces/%s/traces/%s", acceptanceWorkspace, nested.result.TraceID), http.MethodGet, env.otherToken, "", nil)
+	isolation := doRequest(t, client, env.controlPlane+fmt.Sprintf("/v1/workspaces/%s/traces/%s", acceptanceWorkspace, nested.result.TraceID), http.MethodGet, env.otherToken, "", nil)
 	if isolation.status != http.StatusForbidden {
 		t.Fatalf("foreign trace read status=%d body=%s", isolation.status, isolation.body)
 	}
 	assertNoForbiddenBody(t, isolation.body, env.forbidden, "foreign Workspace response")
-	invocationIsolation := doRequest(t, client, env.controlPlane+fmt.Sprintf("/v4/workspaces/%s/invocations/%s", acceptanceWorkspace, nested.result.InvocationID), http.MethodGet, env.otherToken, "", nil)
+	invocationIsolation := doRequest(t, client, env.controlPlane+fmt.Sprintf("/v1/workspaces/%s/invocations/%s", acceptanceWorkspace, nested.result.InvocationID), http.MethodGet, env.otherToken, "", nil)
 	if invocationIsolation.status != http.StatusForbidden {
 		t.Fatalf("foreign Invocation read status=%d body=%s", invocationIsolation.status, invocationIsolation.body)
 	}
@@ -264,6 +270,7 @@ func TestInvokeToRecordAcceptance(t *testing.T) {
 	assertConcurrentCalls(t, client, env)
 	assertRouterUsedSecureNacosBoundaries(t, client, env)
 	assertStorageAndLogsAreMetadataOnly(t, env)
+	writeEvaluationSummary(t, trace)
 }
 
 func loadAcceptanceEnv(t *testing.T) acceptanceEnv {
@@ -272,6 +279,10 @@ func loadAcceptanceEnv(t *testing.T) acceptanceEnv {
 	composeOverride := requiredEnv(t, "NEKIRO_E2E_COMPOSE_OVERRIDE_FILE")
 	if !filepath.IsAbs(composeFile) || !filepath.IsAbs(composeOverride) {
 		t.Fatalf("E2E Compose files must use absolute paths")
+	}
+	composeExtra := os.Getenv("NEKIRO_E2E_COMPOSE_EXTRA_FILE")
+	if composeExtra != "" && (!filepath.IsAbs(composeExtra) || strings.TrimSpace(composeExtra) != composeExtra) {
+		t.Fatalf("NEKIRO_E2E_COMPOSE_EXTRA_FILE must be an absolute path when configured")
 	}
 	ttlSeconds, err := strconv.ParseInt(requiredEnv(t, "NEKIRO_ENDPOINT_CHALLENGE_TTL_SECONDS"), 10, 64)
 	if err != nil || ttlSeconds < 2 || ttlSeconds > 15 {
@@ -293,6 +304,7 @@ func loadAcceptanceEnv(t *testing.T) acceptanceEnv {
 		mtlsPort:           requiredEnv(t, "NEKIRO_E2E_NACOS_MTLS_PORT"),
 		composeFile:        composeFile,
 		composeOverride:    composeOverride,
+		composeExtra:       composeExtra,
 		composeProject:     requiredEnv(t, "NEKIRO_E2E_COMPOSE_PROJECT"),
 		challengeTTL:       time.Duration(ttlSeconds) * time.Second,
 		credentialIssuer:   requiredEnv(t, "NEKIRO_ROUTER_AGENT_CREDENTIAL_ISSUER"),
@@ -441,7 +453,7 @@ func waitForNacosInstanceRemoval(t *testing.T, client *http.Client, env acceptan
 
 func assertRemovedRuntimeRejected(t *testing.T, client *http.Client, env acceptanceEnv, wantCode contracts.PlatformErrorCode) {
 	t.Helper()
-	result, err := doRequestRaw(t.Context(), client, env.controlPlane+"/v4/workspaces/"+acceptanceWorkspace+"/invocations", http.MethodPost, env.ownerToken, "application/json", map[string]any{
+	result, err := doRequestRaw(t.Context(), client, env.controlPlane+"/v1/workspaces/"+acceptanceWorkspace+"/invocations", http.MethodPost, env.ownerToken, "application/json", map[string]any{
 		"agentId": "runtime-b", "capability": "runtime.echo",
 		"input": map[string]any{"fixture": "success", "value": "removed-runtime-value"}, "stream": false,
 	})
@@ -549,9 +561,42 @@ func requiredEnv(t *testing.T, name string) string {
 
 func composeCommand(ctx context.Context, env acceptanceEnv, args ...string) *exec.Cmd {
 	base := []string{"compose", "--project-name", env.composeProject, "--file", env.composeFile, "--file", env.composeOverride, "--profile", "router-nacos-secure"}
+	if env.composeExtra != "" {
+		base = append(base, "--file", env.composeExtra)
+	}
 	command := exec.CommandContext(ctx, "docker", append(base, args...)...)
 	command.Env = append(os.Environ(), runtimeRegistrationEnvironment(env)...)
 	return command
+}
+
+func writeEvaluationSummary(t *testing.T, trace traceRead) {
+	t.Helper()
+	path := os.Getenv("NEKIRO_EVALUATION_SUMMARY_FILE")
+	if path == "" {
+		return
+	}
+	if !filepath.IsAbs(path) || len(trace.Invocations) != 2 {
+		t.Fatal("evaluation summary requires an absolute path and exact two-hop trace")
+	}
+	root := trace.Invocations[0]
+	child := trace.Invocations[1]
+	summary := map[string]any{
+		"schemaVersion":      "1",
+		"platformApi":        "/v1",
+		"rootTaskId":         root.RootTaskID,
+		"parentInvocationId": child.ParentInvocationID,
+		"traceId":            root.TraceID,
+		"explicitFailure":    contracts.ErrorCodeCapabilityNotAllowed,
+		"components":         []string{"Core", "Console", "Runtime A", "Runtime B", "PostgreSQL", "Nacos"},
+	}
+	body, err := json.MarshalIndent(summary, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body = append(body, '\n')
+	if err := os.WriteFile(path, body, 0o600); err != nil {
+		t.Fatalf("write evaluation summary: %v", err)
+	}
 }
 
 func runtimeRegistrationEnvironment(env acceptanceEnv) []string {
@@ -662,7 +707,7 @@ func registerCard(t *testing.T, client *http.Client, env acceptanceEnv, card []b
 
 func registerCardWithEntry(t *testing.T, client *http.Client, env acceptanceEnv, card []byte) (contracts.AgentCard, contracts.CatalogEntry) {
 	t.Helper()
-	registered := doRequest(t, client, env.controlPlane+"/v3/agents", http.MethodPost, env.ownerToken, "application/json", map[string]any{"card": json.RawMessage(card)})
+	registered := doRequest(t, client, env.controlPlane+"/v1/agents", http.MethodPost, env.ownerToken, "application/json", map[string]any{"card": json.RawMessage(card)})
 	if registered.status != http.StatusCreated {
 		t.Fatalf("register status=%d body=%s", registered.status, registered.body)
 	}
@@ -680,7 +725,7 @@ func registerCardWithEntry(t *testing.T, client *http.Client, env acceptanceEnv,
 
 func createEndpointBinding(t *testing.T, client *http.Client, env acceptanceEnv, card contracts.AgentCard) contracts.EndpointBindingResponse {
 	t.Helper()
-	bindingResult := doRequest(t, client, env.controlPlane+fmt.Sprintf("/v4/providers/%s/agents/%s/endpoint-bindings", acceptanceProviderID, card.AgentID), http.MethodPost, env.ownerToken, "application/json", contracts.CreateEndpointBindingRequest{Endpoint: card.Protocol.Endpoint, Method: "http_well_known", Version: card.Version})
+	bindingResult := doRequest(t, client, env.controlPlane+fmt.Sprintf("/v1/providers/%s/agents/%s/endpoint-bindings", acceptanceProviderID, card.AgentID), http.MethodPost, env.ownerToken, "application/json", contracts.CreateEndpointBindingRequest{Endpoint: card.Protocol.Endpoint, Method: "http_well_known", Version: card.Version})
 	if bindingResult.status != http.StatusCreated {
 		t.Fatalf("create binding %s status=%d body=%s", card.AgentID, bindingResult.status, bindingResult.body)
 	}
@@ -694,7 +739,7 @@ func createEndpointBinding(t *testing.T, client *http.Client, env acceptanceEnv,
 
 func createVerificationChallenge(t *testing.T, client *http.Client, env *acceptanceEnv, bindingID string) contracts.VerificationChallengeResponse {
 	t.Helper()
-	challengeResult := doRequest(t, client, env.controlPlane+fmt.Sprintf("/v4/providers/%s/endpoint-bindings/%s/challenges", acceptanceProviderID, bindingID), http.MethodPost, env.ownerToken, "", nil)
+	challengeResult := doRequest(t, client, env.controlPlane+fmt.Sprintf("/v1/providers/%s/endpoint-bindings/%s/challenges", acceptanceProviderID, bindingID), http.MethodPost, env.ownerToken, "", nil)
 	if challengeResult.status != http.StatusCreated {
 		t.Fatalf("create challenge for binding %s status=%d", bindingID, challengeResult.status)
 	}
@@ -712,7 +757,7 @@ func createVerificationChallenge(t *testing.T, client *http.Client, env *accepta
 
 func completeVerificationChallenge(t *testing.T, client *http.Client, env acceptanceEnv, bindingID, challengeID string) httpResult {
 	t.Helper()
-	return doRequest(t, client, env.controlPlane+fmt.Sprintf("/v4/providers/%s/endpoint-bindings/%s/challenges/%s/complete", acceptanceProviderID, bindingID, challengeID), http.MethodPost, env.ownerToken, "", nil)
+	return doRequest(t, client, env.controlPlane+fmt.Sprintf("/v1/providers/%s/endpoint-bindings/%s/challenges/%s/complete", acceptanceProviderID, bindingID, challengeID), http.MethodPost, env.ownerToken, "", nil)
 }
 
 func completeVerificationWithProof(t *testing.T, client *http.Client, env acceptanceEnv, card contracts.AgentCard, binding contracts.EndpointBindingResponse, challenge contracts.VerificationChallengeResponse, proof string) contracts.EndpointBindingResponse {
@@ -734,7 +779,7 @@ func completeVerificationWithProof(t *testing.T, client *http.Client, env accept
 
 func createRelease(t *testing.T, client *http.Client, env acceptanceEnv, card contracts.AgentCard, bindingID string) contracts.AgentReleaseResponse {
 	t.Helper()
-	releaseResult := doRequest(t, client, env.controlPlane+fmt.Sprintf("/v4/providers/%s/agents/%s/releases", acceptanceProviderID, card.AgentID), http.MethodPost, env.ownerToken, "application/json", contracts.CreateAgentReleaseRequest{Version: card.Version, EndpointBindingID: bindingID})
+	releaseResult := doRequest(t, client, env.controlPlane+fmt.Sprintf("/v1/providers/%s/agents/%s/releases", acceptanceProviderID, card.AgentID), http.MethodPost, env.ownerToken, "application/json", contracts.CreateAgentReleaseRequest{Version: card.Version, EndpointBindingID: bindingID})
 	if releaseResult.status != http.StatusCreated {
 		t.Fatalf("create release %s status=%d body=%s", card.AgentID, releaseResult.status, releaseResult.body)
 	}
@@ -748,7 +793,7 @@ func createRelease(t *testing.T, client *http.Client, env acceptanceEnv, card co
 
 func transitionRelease(t *testing.T, client *http.Client, env acceptanceEnv, releaseID, action, wantState string) contracts.AgentReleaseResponse {
 	t.Helper()
-	result := doRequest(t, client, env.controlPlane+fmt.Sprintf("/v4/releases/%s/%s", releaseID, action), http.MethodPost, env.ownerToken, "", nil)
+	result := doRequest(t, client, env.controlPlane+fmt.Sprintf("/v1/releases/%s/%s", releaseID, action), http.MethodPost, env.ownerToken, "", nil)
 	if result.status != http.StatusOK {
 		t.Fatalf("%s release %s status=%d body=%s", action, releaseID, result.status, result.body)
 	}
@@ -783,7 +828,7 @@ func registerAndPublish(t *testing.T, client *http.Client, env *acceptanceEnv, c
 
 func assertPublicAgentBeforePublication(t *testing.T, client *http.Client, env acceptanceEnv, entry contracts.CatalogEntry) {
 	t.Helper()
-	result := doRequest(t, client, env.controlPlane+"/v4/public/agents/"+entry.PublicAgentID, http.MethodGet, "", "", nil)
+	result := doRequest(t, client, env.controlPlane+"/v1/public/agents/"+entry.PublicAgentID, http.MethodGet, "", "", nil)
 	if result.status != http.StatusOK || !bytes.Contains(result.body, []byte(`"availability":"not_installable"`)) || !bytes.Contains(result.body, []byte(`"releases":[]`)) {
 		t.Fatalf("pre-public public Agent status=%d body=%s", result.status, result.body)
 	}
@@ -796,7 +841,7 @@ func assertPublicAgentBeforePublication(t *testing.T, client *http.Client, env a
 
 func assertPublicAgentAfterPublication(t *testing.T, client *http.Client, env acceptanceEnv, entry contracts.CatalogEntry, release contracts.AgentReleaseResponse) {
 	t.Helper()
-	result := doRequest(t, client, env.controlPlane+"/v4/public/agents/"+entry.PublicAgentID, http.MethodGet, "", "", nil)
+	result := doRequest(t, client, env.controlPlane+"/v1/public/agents/"+entry.PublicAgentID, http.MethodGet, "", "", nil)
 	if result.status != http.StatusOK {
 		t.Fatalf("public Agent status=%d body=%s", result.status, result.body)
 	}
@@ -816,11 +861,11 @@ func assertPublicAgentAfterPublication(t *testing.T, client *http.Client, env ac
 
 func assertPublicAgentInputMatrix(t *testing.T, client *http.Client, env acceptanceEnv, entry contracts.CatalogEntry) {
 	t.Helper()
-	malformed := doRequest(t, client, env.controlPlane+"/v4/public/agents/not-an-agent-id", http.MethodGet, "", "", nil)
+	malformed := doRequest(t, client, env.controlPlane+"/v1/public/agents/not-an-agent-id", http.MethodGet, "", "", nil)
 	if malformed.status != http.StatusBadRequest {
 		t.Fatalf("malformed public Agent status=%d body=%s", malformed.status, malformed.body)
 	}
-	unknown := doRequest(t, client, env.controlPlane+"/v4/public/agents/agt_ffffffffffffffffffffffffffffffff", http.MethodGet, "", "", nil)
+	unknown := doRequest(t, client, env.controlPlane+"/v1/public/agents/agt_ffffffffffffffffffffffffffffffff", http.MethodGet, "", "", nil)
 	if unknown.status != http.StatusNotFound {
 		t.Fatalf("unknown public Agent status=%d body=%s", unknown.status, unknown.body)
 	}
@@ -831,7 +876,7 @@ func assertPublicAgentInputMatrix(t *testing.T, client *http.Client, env accepta
 
 func installFromPublicShare(t *testing.T, client *http.Client, env acceptanceEnv, workspaceID string, entry contracts.CatalogEntry, release contracts.AgentReleaseResponse) contracts.Installation {
 	t.Helper()
-	viewResult := doRequest(t, client, env.controlPlane+"/v4/public/agents/"+entry.PublicAgentID, http.MethodGet, "", "", nil)
+	viewResult := doRequest(t, client, env.controlPlane+"/v1/public/agents/"+entry.PublicAgentID, http.MethodGet, "", "", nil)
 	if viewResult.status != http.StatusOK {
 		t.Fatalf("resolve public share for installation status=%d body=%s", viewResult.status, viewResult.body)
 	}
@@ -844,7 +889,7 @@ func installFromPublicShare(t *testing.T, client *http.Client, env acceptanceEnv
 	for _, permission := range selected.Permissions {
 		acceptedPermissions = append(acceptedPermissions, permission.ID)
 	}
-	result := doRequest(t, client, env.controlPlane+fmt.Sprintf("/v3/workspaces/%s/installations", workspaceID), http.MethodPost, env.ownerToken, "application/json", map[string]any{"agentId": selected.AgentID, "versionConstraint": selected.AgentCardVersion, "acceptedPermissions": acceptedPermissions})
+	result := doRequest(t, client, env.controlPlane+fmt.Sprintf("/v1/workspaces/%s/installations", workspaceID), http.MethodPost, env.ownerToken, "application/json", map[string]any{"agentId": selected.AgentID, "versionConstraint": selected.AgentCardVersion, "acceptedPermissions": acceptedPermissions})
 	if result.status != http.StatusCreated {
 		t.Fatalf("public install status=%d body=%s", result.status, result.body)
 	}
@@ -891,7 +936,7 @@ func removeChallengeProof(t *testing.T, env acceptanceEnv, service, challengeID 
 
 func createWorkspace(t *testing.T, client *http.Client, env acceptanceEnv, workspaceID, token string) {
 	t.Helper()
-	result := doRequest(t, client, env.controlPlane+"/v3/workspaces", http.MethodPost, token, "application/json", map[string]any{"workspaceId": workspaceID})
+	result := doRequest(t, client, env.controlPlane+"/v1/workspaces", http.MethodPost, token, "application/json", map[string]any{"workspaceId": workspaceID})
 	if result.status != http.StatusCreated {
 		t.Fatalf("create Workspace %s status=%d body=%s", workspaceID, result.status, result.body)
 	}
@@ -899,7 +944,7 @@ func createWorkspace(t *testing.T, client *http.Client, env acceptanceEnv, works
 
 func install(t *testing.T, client *http.Client, env acceptanceEnv, workspaceID, agentID string, permissions []string) contracts.Installation {
 	t.Helper()
-	result := doRequest(t, client, env.controlPlane+fmt.Sprintf("/v3/workspaces/%s/installations", workspaceID), http.MethodPost, env.ownerToken, "application/json", map[string]any{"agentId": agentID, "versionConstraint": "=1.0.0", "acceptedPermissions": permissions})
+	result := doRequest(t, client, env.controlPlane+fmt.Sprintf("/v1/workspaces/%s/installations", workspaceID), http.MethodPost, env.ownerToken, "application/json", map[string]any{"agentId": agentID, "versionConstraint": "=1.0.0", "acceptedPermissions": permissions})
 	if result.status != http.StatusCreated {
 		t.Fatalf("install %s status=%d body=%s", agentID, result.status, result.body)
 	}
@@ -916,7 +961,7 @@ func install(t *testing.T, client *http.Client, env acceptanceEnv, workspaceID, 
 
 func updateInstallationStatus(t *testing.T, client *http.Client, env acceptanceEnv, installation contracts.Installation, wantStatus string) contracts.Installation {
 	t.Helper()
-	result := doRequest(t, client, env.controlPlane+fmt.Sprintf("/v3/workspaces/%s/installations/%s", installation.WorkspaceID, installation.InstallationID), http.MethodPatch, env.ownerToken, "application/json", contracts.UpdateInstallationRequest{Status: wantStatus})
+	result := doRequest(t, client, env.controlPlane+fmt.Sprintf("/v1/workspaces/%s/installations/%s", installation.WorkspaceID, installation.InstallationID), http.MethodPatch, env.ownerToken, "application/json", contracts.UpdateInstallationRequest{Status: wantStatus})
 	if result.status != http.StatusOK {
 		t.Fatalf("set Installation %s to %s status=%d body=%s", installation.InstallationID, wantStatus, result.status, result.body)
 	}
@@ -946,7 +991,7 @@ func assertTrustedPublicationError(t *testing.T, result httpResult, wantStatus i
 
 func readEndpointBinding(t *testing.T, client *http.Client, env acceptanceEnv, bindingID string) contracts.EndpointBindingResponse {
 	t.Helper()
-	result := doRequest(t, client, env.controlPlane+fmt.Sprintf("/v4/providers/%s/endpoint-bindings/%s", acceptanceProviderID, bindingID), http.MethodGet, env.ownerToken, "", nil)
+	result := doRequest(t, client, env.controlPlane+fmt.Sprintf("/v1/providers/%s/endpoint-bindings/%s", acceptanceProviderID, bindingID), http.MethodGet, env.ownerToken, "", nil)
 	if result.status != http.StatusOK {
 		t.Fatalf("read Endpoint Binding %s status=%d body=%s", bindingID, result.status, result.body)
 	}
@@ -1038,7 +1083,7 @@ func assertUnpublishedReleaseRejected(t *testing.T, client *http.Client, env *ac
 	if release.State != contracts.ReleaseStatePendingVerification || release.VerificationEvidenceDigest != nil || release.PublishedAt != nil {
 		t.Fatalf("pending Release=%#v", release)
 	}
-	result := doRequest(t, client, env.controlPlane+fmt.Sprintf("/v3/workspaces/%s/installations", acceptanceWorkspace), http.MethodPost, env.ownerToken, "application/json", map[string]any{"agentId": card.AgentID, "versionConstraint": "=1.0.0", "acceptedPermissions": []string{}})
+	result := doRequest(t, client, env.controlPlane+fmt.Sprintf("/v1/workspaces/%s/installations", acceptanceWorkspace), http.MethodPost, env.ownerToken, "application/json", map[string]any{"agentId": card.AgentID, "versionConstraint": "=1.0.0", "acceptedPermissions": []string{}})
 	if result.status != http.StatusForbidden {
 		t.Fatalf("unpublished Release install status=%d body=%s", result.status, result.body)
 	}
@@ -1056,7 +1101,7 @@ func assertInstallationAndReleaseGates(t *testing.T, client *http.Client, env *a
 	env.forbid(disabledContent, suspendedContent, revokedContent)
 
 	disabled := updateInstallationStatus(t, client, *env, runtimeBInstallation, "disabled")
-	disabledResult := doRequest(t, client, env.controlPlane+"/v4/workspaces/"+acceptanceWorkspace+"/invocations", http.MethodPost, env.ownerToken, "application/json", map[string]any{"agentId": "runtime-b", "capability": "runtime.echo", "input": map[string]any{"fixture": "success", "value": disabledContent}, "stream": false})
+	disabledResult := doRequest(t, client, env.controlPlane+"/v1/workspaces/"+acceptanceWorkspace+"/invocations", http.MethodPost, env.ownerToken, "application/json", map[string]any{"agentId": "runtime-b", "capability": "runtime.echo", "input": map[string]any{"fixture": "success", "value": disabledContent}, "stream": false})
 	if disabledResult.status != http.StatusConflict {
 		t.Fatalf("disabled Installation invocation status=%d body=%s", disabledResult.status, disabledResult.body)
 	}
@@ -1071,7 +1116,7 @@ func assertInstallationAndReleaseGates(t *testing.T, client *http.Client, env *a
 		t.Fatalf("suspended Release=%#v", suspended)
 	}
 	assertPublicAgentNotInstallable(t, client, *env, env.publicAgentIDs[lifecycleRelease.AgentID])
-	suspendedResult := doRequest(t, client, env.controlPlane+"/v4/workspaces/"+acceptanceWorkspace+"/invocations", http.MethodPost, env.ownerToken, "application/json", map[string]any{"agentId": lifecycleRelease.AgentID, "capability": "runtime.echo", "input": map[string]any{"fixture": "success", "value": suspendedContent}, "stream": false})
+	suspendedResult := doRequest(t, client, env.controlPlane+"/v1/workspaces/"+acceptanceWorkspace+"/invocations", http.MethodPost, env.ownerToken, "application/json", map[string]any{"agentId": lifecycleRelease.AgentID, "capability": "runtime.echo", "input": map[string]any{"fixture": "success", "value": suspendedContent}, "stream": false})
 	if suspendedResult.status != http.StatusConflict {
 		t.Fatalf("suspended Release invocation status=%d body=%s", suspendedResult.status, suspendedResult.body)
 	}
@@ -1082,7 +1127,7 @@ func assertInstallationAndReleaseGates(t *testing.T, client *http.Client, env *a
 		t.Fatalf("revoked Release=%#v", revoked)
 	}
 	assertPublicAgentNotInstallable(t, client, *env, env.publicAgentIDs[lifecycleRelease.AgentID])
-	revokedResult := doRequest(t, client, env.controlPlane+"/v4/workspaces/"+acceptanceWorkspace+"/invocations", http.MethodPost, env.ownerToken, "application/json", map[string]any{"agentId": lifecycleRelease.AgentID, "capability": "runtime.echo", "input": map[string]any{"fixture": "success", "value": revokedContent}, "stream": false})
+	revokedResult := doRequest(t, client, env.controlPlane+"/v1/workspaces/"+acceptanceWorkspace+"/invocations", http.MethodPost, env.ownerToken, "application/json", map[string]any{"agentId": lifecycleRelease.AgentID, "capability": "runtime.echo", "input": map[string]any{"fixture": "success", "value": revokedContent}, "stream": false})
 	if revokedResult.status != http.StatusConflict {
 		t.Fatalf("revoked Release invocation status=%d body=%s", revokedResult.status, revokedResult.body)
 	}
@@ -1091,7 +1136,7 @@ func assertInstallationAndReleaseGates(t *testing.T, client *http.Client, env *a
 
 func assertPublicAgentNotInstallable(t *testing.T, client *http.Client, env acceptanceEnv, publicAgentID string) {
 	t.Helper()
-	result := doRequest(t, client, env.controlPlane+"/v4/public/agents/"+publicAgentID, http.MethodGet, "", "", nil)
+	result := doRequest(t, client, env.controlPlane+"/v1/public/agents/"+publicAgentID, http.MethodGet, "", "", nil)
 	if result.status != http.StatusOK || !bytes.Contains(result.body, []byte(`"availability":"not_installable"`)) || !bytes.Contains(result.body, []byte(`"releases":[]`)) {
 		t.Fatalf("non-installable public Agent status=%d body=%s", result.status, result.body)
 	}
@@ -1202,7 +1247,7 @@ type jsonInvocation struct {
 
 func invokeJSON(t *testing.T, client *http.Client, env acceptanceEnv, agentID, capability string, input map[string]any) jsonInvocation {
 	t.Helper()
-	result := doRequest(t, client, env.controlPlane+"/v4/workspaces/"+acceptanceWorkspace+"/invocations", http.MethodPost, env.ownerToken, "application/json", map[string]any{"agentId": agentID, "capability": capability, "input": input, "stream": false})
+	result := doRequest(t, client, env.controlPlane+"/v1/workspaces/"+acceptanceWorkspace+"/invocations", http.MethodPost, env.ownerToken, "application/json", map[string]any{"agentId": agentID, "capability": capability, "input": input, "stream": false})
 	if result.status != http.StatusOK {
 		t.Fatalf("JSON invoke %s status=%d body=%s", agentID, result.status, result.body)
 	}
@@ -1223,7 +1268,7 @@ func invokeSSE(t *testing.T, client *http.Client, env acceptanceEnv, agentID, ca
 	if err != nil {
 		t.Fatal(err)
 	}
-	request, err := http.NewRequestWithContext(t.Context(), http.MethodPost, env.controlPlane+"/v4/workspaces/"+acceptanceWorkspace+"/invocations", bytes.NewReader(body))
+	request, err := http.NewRequestWithContext(t.Context(), http.MethodPost, env.controlPlane+"/v1/workspaces/"+acceptanceWorkspace+"/invocations", bytes.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1281,22 +1326,22 @@ func invokeSSE(t *testing.T, client *http.Client, env acceptanceEnv, agentID, ca
 }
 
 type traceRead struct {
-	contracts.TraceResponseV4
+	contracts.TraceResponseV1
 	raw []byte
 }
 
 func readTrace(t *testing.T, client *http.Client, env acceptanceEnv, traceID contracts.TraceID) traceRead {
 	t.Helper()
-	result := doRequest(t, client, env.controlPlane+fmt.Sprintf("/v4/workspaces/%s/traces/%s", acceptanceWorkspace, traceID), http.MethodGet, env.ownerToken, "", nil)
+	result := doRequest(t, client, env.controlPlane+fmt.Sprintf("/v1/workspaces/%s/traces/%s", acceptanceWorkspace, traceID), http.MethodGet, env.ownerToken, "", nil)
 	if result.status != http.StatusOK {
 		t.Fatalf("trace read status=%d body=%s", result.status, result.body)
 	}
 	assertNoForbiddenBody(t, result.body, env.forbidden, "Trace metadata response")
-	var trace contracts.TraceResponseV4
+	var trace contracts.TraceResponseV1
 	if err := json.Unmarshal(result.body, &trace); err != nil {
 		t.Fatalf("decode trace: %v", err)
 	}
-	return traceRead{TraceResponseV4: trace, raw: result.body}
+	return traceRead{TraceResponseV1: trace, raw: result.body}
 }
 
 func assertRecord(t *testing.T, client *http.Client, env acceptanceEnv, invocationID, workspaceID, agentID, status, errorCode string) {
@@ -1314,14 +1359,14 @@ func assertRecord(t *testing.T, client *http.Client, env acceptanceEnv, invocati
 	}
 }
 
-func readInvocationDetail(t *testing.T, client *http.Client, env acceptanceEnv, invocationID, workspaceID string) (contracts.InvocationDetailResponseV4, []byte) {
+func readInvocationDetail(t *testing.T, client *http.Client, env acceptanceEnv, invocationID, workspaceID string) (contracts.InvocationDetailResponseV1, []byte) {
 	t.Helper()
-	result := doRequest(t, client, env.controlPlane+fmt.Sprintf("/v4/workspaces/%s/invocations/%s", workspaceID, invocationID), http.MethodGet, env.ownerToken, "", nil)
+	result := doRequest(t, client, env.controlPlane+fmt.Sprintf("/v1/workspaces/%s/invocations/%s", workspaceID, invocationID), http.MethodGet, env.ownerToken, "", nil)
 	if result.status != http.StatusOK {
 		t.Fatalf("record read status=%d body=%s", result.status, result.body)
 	}
 	assertNoForbiddenBody(t, result.body, env.forbidden, "Invocation metadata response")
-	var detail contracts.InvocationDetailResponseV4
+	var detail contracts.InvocationDetailResponseV1
 	if err := json.Unmarshal(result.body, &detail); err != nil {
 		t.Fatalf("decode record: %v", err)
 	}
@@ -1330,7 +1375,7 @@ func readInvocationDetail(t *testing.T, client *http.Client, env acceptanceEnv, 
 
 func assertInvocationAbsent(t *testing.T, client *http.Client, env acceptanceEnv, invocationID string) {
 	t.Helper()
-	result := doRequest(t, client, env.controlPlane+fmt.Sprintf("/v4/workspaces/%s/invocations/%s", acceptanceWorkspace, invocationID), http.MethodGet, env.ownerToken, "", nil)
+	result := doRequest(t, client, env.controlPlane+fmt.Sprintf("/v1/workspaces/%s/invocations/%s", acceptanceWorkspace, invocationID), http.MethodGet, env.ownerToken, "", nil)
 	assertNoForbiddenBody(t, result.body, env.forbidden, "absent Invocation response")
 	if result.status != http.StatusNotFound {
 		t.Fatalf("rejected direct Agent request created Invocation %s: read status=%d", invocationID, result.status)
@@ -1341,7 +1386,7 @@ func assertInvocationAbsent(t *testing.T, client *http.Client, env acceptanceEnv
 	}
 }
 
-func validateInvocationDetail(detail contracts.InvocationDetailResponseV4, invocationID, workspaceID, agentID, status, errorCode string) error {
+func validateInvocationDetail(detail contracts.InvocationDetailResponseV1, invocationID, workspaceID, agentID, status, errorCode string) error {
 	if detail.Invocation.InvocationID != invocationID || detail.Invocation.WorkspaceID != workspaceID || detail.Invocation.TargetAgentID != agentID || detail.Invocation.Status != status || len(detail.Events) == 0 {
 		return fmt.Errorf("record projection=%#v events=%#v", detail.Invocation, detail.Events)
 	}
@@ -1380,7 +1425,7 @@ func validateInvocationDetail(detail contracts.InvocationDetailResponseV4, invoc
 	return nil
 }
 
-func validateExpectedReleaseProvenance(record contracts.InvocationRecordV4, release contracts.AgentReleaseResponse) error {
+func validateExpectedReleaseProvenance(record contracts.InvocationRecordV1, release contracts.AgentReleaseResponse) error {
 	if record.AgentReleaseID != release.ReleaseID || record.AgentCardDigest != release.CardDigest || record.TargetAgentID != release.AgentID || record.AgentCardVersion != release.AgentCardVersion {
 		return fmt.Errorf("Invocation Release provenance=%#v want Release=%#v", record, release)
 	}
@@ -1389,7 +1434,7 @@ func validateExpectedReleaseProvenance(record contracts.InvocationRecordV4, rele
 
 func assertQueryableRelease(t *testing.T, client *http.Client, env acceptanceEnv, expected contracts.AgentReleaseResponse) {
 	t.Helper()
-	result := doRequest(t, client, env.controlPlane+"/v4/releases/"+expected.ReleaseID, http.MethodGet, env.ownerToken, "", nil)
+	result := doRequest(t, client, env.controlPlane+"/v1/releases/"+expected.ReleaseID, http.MethodGet, env.ownerToken, "", nil)
 	if result.status != http.StatusOK {
 		t.Fatalf("read Release %s status=%d body=%s", expected.ReleaseID, result.status, result.body)
 	}
@@ -1431,7 +1476,7 @@ func assertReverseTrace(t *testing.T, client *http.Client, env acceptanceEnv, tr
 	if len(trace.Invocations) != 2 {
 		t.Fatalf("reverse Trace invocations=%d body=%s", len(trace.Invocations), trace.raw)
 	}
-	var root, child *contracts.InvocationRecordV4
+	var root, child *contracts.InvocationRecordV1
 	for index := range trace.Invocations {
 		projection := &trace.Invocations[index]
 		switch projection.TargetAgentID {
@@ -1550,15 +1595,15 @@ func TestRouterCredentialLeakDetectorRejectsEncodedJWTMaterial(t *testing.T) {
 
 func assertFailureMatrix(t *testing.T, client *http.Client, env acceptanceEnv) {
 	t.Helper()
-	missing := doRequest(t, client, env.controlPlane+"/v4/workspaces/"+acceptanceWorkspace+"/invocations", http.MethodPost, env.ownerToken, "application/json", map[string]any{"agentId": "not-installed", "capability": "runtime.echo", "input": map[string]any{"fixture": "success", "value": "policy-content-secret"}, "stream": false})
+	missing := doRequest(t, client, env.controlPlane+"/v1/workspaces/"+acceptanceWorkspace+"/invocations", http.MethodPost, env.ownerToken, "application/json", map[string]any{"agentId": "not-installed", "capability": "runtime.echo", "input": map[string]any{"fixture": "success", "value": "policy-content-secret"}, "stream": false})
 	assertErrorCode(t, missing, contracts.ErrorCodeAgentNotInstalled, env.forbidden)
-	capabilityDenied := doRequest(t, client, env.controlPlane+"/v4/workspaces/"+acceptanceWorkspace+"/invocations", http.MethodPost, env.ownerToken, "application/json", map[string]any{"agentId": "runtime-b", "capability": "runtime.denied", "input": map[string]any{"fixture": "success", "value": "policy-content-secret"}, "stream": false})
+	capabilityDenied := doRequest(t, client, env.controlPlane+"/v1/workspaces/"+acceptanceWorkspace+"/invocations", http.MethodPost, env.ownerToken, "application/json", map[string]any{"agentId": "runtime-b", "capability": "runtime.denied", "input": map[string]any{"fixture": "success", "value": "policy-content-secret"}, "stream": false})
 	assertErrorCode(t, capabilityDenied, contracts.ErrorCodeCapabilityNotAllowed, env.forbidden)
-	protocol := doRequest(t, client, env.controlPlane+"/v4/workspaces/"+acceptanceWorkspace+"/invocations", http.MethodPost, env.ownerToken, "application/json", map[string]any{"agentId": "runtime-protocol", "capability": "runtime.protocol", "input": map[string]any{"fixture": "protocol", "value": "protocol-content-secret"}, "stream": false})
+	protocol := doRequest(t, client, env.controlPlane+"/v1/workspaces/"+acceptanceWorkspace+"/invocations", http.MethodPost, env.ownerToken, "application/json", map[string]any{"agentId": "runtime-protocol", "capability": "runtime.protocol", "input": map[string]any{"fixture": "protocol", "value": "protocol-content-secret"}, "stream": false})
 	assertErrorCode(t, protocol, contracts.ErrorCodeA2AProtocol, env.forbidden)
-	agent := doRequest(t, client, env.controlPlane+"/v4/workspaces/"+acceptanceWorkspace+"/invocations", http.MethodPost, env.ownerToken, "application/json", map[string]any{"agentId": "runtime-b", "capability": "runtime.echo", "input": map[string]any{"fixture": "failure", "value": "agent-content-secret"}, "stream": false})
+	agent := doRequest(t, client, env.controlPlane+"/v1/workspaces/"+acceptanceWorkspace+"/invocations", http.MethodPost, env.ownerToken, "application/json", map[string]any{"agentId": "runtime-b", "capability": "runtime.echo", "input": map[string]any{"fixture": "failure", "value": "agent-content-secret"}, "stream": false})
 	assertErrorCode(t, agent, contracts.ErrorCodeAgentExecutionFailed, env.forbidden)
-	route := doRequest(t, client, env.controlPlane+"/v4/workspaces/"+acceptanceWorkspace+"/invocations", http.MethodPost, env.ownerToken, "application/json", map[string]any{"agentId": "runtime-route", "capability": "runtime.route", "input": map[string]any{"fixture": "success", "value": "route-content-secret"}, "stream": false})
+	route := doRequest(t, client, env.controlPlane+"/v1/workspaces/"+acceptanceWorkspace+"/invocations", http.MethodPost, env.ownerToken, "application/json", map[string]any{"agentId": "runtime-route", "capability": "runtime.route", "input": map[string]any{"fixture": "success", "value": "route-content-secret"}, "stream": false})
 	routeFailure := assertCorrelatedInvocationError(t, route, contracts.ErrorCodeAgentUnavailable, env.forbidden)
 	assertRecord(t, client, env, routeFailure.InvocationID, acceptanceWorkspace, "runtime-route", "failed", string(contracts.ErrorCodeAgentUnavailable))
 	timedOut := invokeSSE(t, client, env, "runtime-timeout", "runtime.timeout", map[string]any{"fixture": "hold", "value": "timeout-content-secret"})
@@ -1623,13 +1668,13 @@ func assertDependencyFailure(t *testing.T, client *http.Client, env acceptanceEn
 	if output, err := stop.CombinedOutput(); err != nil {
 		t.Fatalf("stop Control Plane for dependency fixture: %v output=%s", err, output)
 	}
-	request := contracts.DispatchInvocationRequestV4{
+	request := contracts.DispatchInvocationRequestV1{
 		InvocationID: "dependency-check-invocation", RootTaskID: "dependency-check-task", TraceID: "trc_dependency_check_1",
 		Caller: contracts.Caller{Type: "user", ID: "acceptance-owner"}, WorkspaceID: acceptanceWorkspace,
 		TargetAgentID: "runtime-b", AgentCardVersion: "1.0.0", Capability: "runtime.echo",
 		Input: json.RawMessage(`{"fixture":"success","value":"dependency-raw-secret"}`), Stream: false,
 	}
-	result, requestErr := doRequestRaw(t.Context(), client, env.routerURL+"/internal/v4/invocations", http.MethodPost, env.routerToken, "application/json", request)
+	result, requestErr := doRequestRaw(t.Context(), client, env.routerURL+"/internal/v1/invocations", http.MethodPost, env.routerToken, "application/json", request)
 	start := composeCommand(t.Context(), env, "start", "control-plane")
 	if output, err := start.CombinedOutput(); err != nil {
 		t.Fatalf("restart Control Plane after dependency fixture: %v output=%s", err, output)
@@ -1649,7 +1694,7 @@ func invokeCanceledSSE(t *testing.T, client *http.Client, env acceptanceEnv, age
 	if err != nil {
 		t.Fatal(err)
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, env.controlPlane+"/v4/workspaces/"+acceptanceWorkspace+"/invocations", bytes.NewReader(body))
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, env.controlPlane+"/v1/workspaces/"+acceptanceWorkspace+"/invocations", bytes.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1730,13 +1775,13 @@ func assertProviderCancellation(t *testing.T, client *http.Client, env acceptanc
 	assertRecord(t, client, env, observation.result.InvocationID, acceptanceWorkspace, "runtime-interrupted", "succeeded", "")
 }
 
-func waitForRecord(t *testing.T, client *http.Client, env acceptanceEnv, invocationID, status, errorCode string) contracts.InvocationDetailResponseV4 {
+func waitForRecord(t *testing.T, client *http.Client, env acceptanceEnv, invocationID, status, errorCode string) contracts.InvocationDetailResponseV1 {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		result := doRequest(t, client, env.controlPlane+fmt.Sprintf("/v4/workspaces/%s/invocations/%s", acceptanceWorkspace, invocationID), http.MethodGet, env.ownerToken, "", nil)
+		result := doRequest(t, client, env.controlPlane+fmt.Sprintf("/v1/workspaces/%s/invocations/%s", acceptanceWorkspace, invocationID), http.MethodGet, env.ownerToken, "", nil)
 		if result.status == http.StatusOK {
-			var detail contracts.InvocationDetailResponseV4
+			var detail contracts.InvocationDetailResponseV1
 			if err := json.Unmarshal(result.body, &detail); err == nil && detail.Invocation.Status == status {
 				assertNoForbiddenBody(t, result.body, env.forbidden, "Invocation metadata response")
 				if err := validateInvocationDetail(detail, invocationID, acceptanceWorkspace, detail.Invocation.TargetAgentID, status, errorCode); err != nil {
@@ -1748,7 +1793,7 @@ func waitForRecord(t *testing.T, client *http.Client, env acceptanceEnv, invocat
 		time.Sleep(100 * time.Millisecond)
 	}
 	t.Fatalf("Invocation %s did not reach %s", invocationID, status)
-	return contracts.InvocationDetailResponseV4{}
+	return contracts.InvocationDetailResponseV1{}
 }
 
 type platformErrorObservation struct {
@@ -1825,7 +1870,7 @@ func assertConcurrentCalls(t *testing.T, client *http.Client, env acceptanceEnv)
 		go func() {
 			defer wait.Done()
 			<-start
-			result, err := doRequestRaw(t.Context(), client, env.controlPlane+"/v4/workspaces/"+acceptanceWorkspace+"/invocations", http.MethodPost, env.ownerToken, "application/json", map[string]any{"agentId": "runtime-b", "capability": "runtime.echo", "input": map[string]any{"fixture": "success", "value": fmt.Sprintf("concurrent-%03d", index)}, "stream": false})
+			result, err := doRequestRaw(t.Context(), client, env.controlPlane+"/v1/workspaces/"+acceptanceWorkspace+"/invocations", http.MethodPost, env.ownerToken, "application/json", map[string]any{"agentId": "runtime-b", "capability": "runtime.echo", "input": map[string]any{"fixture": "success", "value": fmt.Sprintf("concurrent-%03d", index)}, "stream": false})
 			results <- outcome{index: index, result: result, err: err}
 		}()
 	}
@@ -1881,7 +1926,7 @@ func assertConcurrentCalls(t *testing.T, client *http.Client, env acceptanceEnv)
 	for _, invocationID := range ids {
 		invocationID := invocationID
 		go func() {
-			result, err := doRequestRaw(t.Context(), client, env.controlPlane+fmt.Sprintf("/v4/workspaces/%s/invocations/%s", acceptanceWorkspace, invocationID), http.MethodGet, env.ownerToken, "", nil)
+			result, err := doRequestRaw(t.Context(), client, env.controlPlane+fmt.Sprintf("/v1/workspaces/%s/invocations/%s", acceptanceWorkspace, invocationID), http.MethodGet, env.ownerToken, "", nil)
 			if err != nil {
 				readErrors <- err
 				return
@@ -1894,7 +1939,7 @@ func assertConcurrentCalls(t *testing.T, client *http.Client, env acceptanceEnv)
 				readErrors <- err
 				return
 			}
-			var detail contracts.InvocationDetailResponseV4
+			var detail contracts.InvocationDetailResponseV1
 			if err := json.Unmarshal(result.body, &detail); err != nil {
 				readErrors <- fmt.Errorf("decode concurrent Invocation %s: %w", invocationID, err)
 				return
