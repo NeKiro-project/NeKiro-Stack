@@ -63,7 +63,8 @@ jobs:
           done
           test "$(jq -r .platformApiVersion evidence/core/images.json)" = v1
           test "$(jq -r .platformApiVersion evidence/console/images.json)" = v1
-          test "$(jq -r .platformApiVersion evidence/sdk/release.json)" = 1
+          test "$(jq -r .platformApiVersion evidence/sdk/release.json)" = v1
+          test "$(jq -r .agentIngressVersion evidence/samples/images.json)" = v1
 
       - name: Resolve immutable component image references
         shell: bash

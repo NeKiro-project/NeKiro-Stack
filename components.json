@@ -12,7 +12,7 @@
     },
     "sdkGo": {
       "repository": "NeKiro-project/nekiro-sdk-go",
-      "commitSha": "ef4fd2f78974ea4840db8fb9d44dba31970746e1"
+      "commitSha": "adf4f6dced5c56f5be1ddbcf6efec0fc20f7530e"
     },
     "samples": {
       "repository": "NeKiro-project/NeKiro-Samples",
