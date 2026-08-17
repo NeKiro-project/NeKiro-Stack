@@ -35,6 +35,13 @@ if [ "$ready" != true ]; then
   exit 1
 fi
 
+if [ -z "${GHCR_USERNAME:-}" ] || [ -z "${GHCR_TOKEN:-}" ]; then
+  echo 'NeKiro evaluation: GHCR_USERNAME and GHCR_TOKEN are required to pull released component images.' >&2
+  exit 1
+fi
+printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GHCR_USERNAME" --password-stdin >/dev/null
+unset GHCR_TOKEN
+
 /opt/nekiro/evaluation-config -root "$evaluation_root" -output "$environment_file"
 set -a
 . "$environment_file"
