@@ -31,8 +31,11 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
-          test "$(git cat-file -t "$RELEASE_TAG")" = tag
-          test "$(git rev-list -n 1 "$RELEASE_TAG")" = "$GITHUB_SHA"
+          release_verify_ref="refs/tags/release-verify"
+          git fetch --force --no-tags origin "refs/tags/$RELEASE_TAG:$release_verify_ref"
+          test "$(git cat-file -t "$release_verify_ref")" = tag
+          test "$(git rev-list -n 1 "$release_verify_ref")" = "$GITHUB_SHA"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           go run ./cmd/manifest-validator components.json
           go test ./...
           go vet ./...
