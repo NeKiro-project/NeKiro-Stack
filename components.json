@@ -1,14 +1,14 @@
 {
   "schemaVersion": "1",
-  "contractIdentity": "NeKiro/contracts@076bba54344314c8cd57639ceacca49195e6d00d",
+  "contractIdentity": "NeKiro/contracts@eb60c10f7a490aa601d577b5b12bf12568bf7d1b",
   "components": {
     "core": {
       "repository": "NeKiro-project/NeKiro",
-      "commitSha": "076bba54344314c8cd57639ceacca49195e6d00d"
+      "commitSha": "eb60c10f7a490aa601d577b5b12bf12568bf7d1b"
     },
     "console": {
       "repository": "NeKiro-project/NeKiro-Console",
-      "commitSha": "fef1241b410a6c986bb7c1521a25b376992c8e38"
+      "commitSha": "8cd224add3488ac7d996e3114c0ed18b918c6508"
     },
     "sdkGo": {
       "repository": "NeKiro-project/nekiro-sdk-go",
