@@ -8,7 +8,7 @@
     },
     "console": {
       "repository": "NeKiro-project/NeKiro-Console",
-      "commitSha": "0a15fa8e0a5ffff6f07b3341c205781d7a25b589"
+      "commitSha": "1e275e557e447928fb15bcca94eda11fc1f95883"
     },
     "sdkGo": {
       "repository": "NeKiro-project/nekiro-sdk-go",
@@ -16,7 +16,7 @@
     },
     "samples": {
       "repository": "NeKiro-project/NeKiro-Samples",
-      "commitSha": "6da7543afbb3005c8ec34746b89fc1fb13450515"
+      "commitSha": "ddc1ce92f180b91bab596be667f70dfaed6ac868"
     },
     "transportGo": {
       "repository": "NeKiro-project/nekiro-a2a-transport-go",
